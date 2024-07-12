@@ -4,6 +4,7 @@ from utils.vis_masks import SceneFileReader
 from pathlib import Path
 import cv2
 import time
+import random
 
 def get_rigit_silhouette(scene):
     # read in all scene masks
@@ -81,12 +82,6 @@ if __name__ == "__main__":
     scene = SceneFileReader.create(DATASET_PATH / 'config.cfg')
     silhouettes = get_rigit_silhouette(scene)
 
-    width = 1
-    height = 1
-    depth = 1
-
-    voxel_size = 0.005
-
     # calc obejct poses center
     object_poses = scene.get_object_poses(scene_id)
     translations = []
@@ -111,9 +106,10 @@ if __name__ == "__main__":
         distances.append(np.linalg.norm(camera_poi - camera_pose[:3, 3]))
     max_distance = np.max(distances)
 
-    width = max_distance * 2
-    height = max_distance * 2
-    depth = max_distance * 2
+    width = max_distance * 1.5
+    height = max_distance * 1.5
+    depth = max_distance * 1.5
+    voxel_size = 0.005
 
     voxel_carving_grid = o3d.geometry.VoxelGrid.create_dense(
         width=width,
@@ -121,55 +117,21 @@ if __name__ == "__main__":
         depth=depth,
         voxel_size=voxel_size,
         origin=[camera_poi[0] - width/2, camera_poi[1] - height/2, camera_poi[2] - depth/2],
-        color=[0.5, 0.5, 0.5]
+        color=[0.2, 0.2, 0.2]
     )
 
-    print(voxel_carving_grid)
-
-    start_time = time.time()
-
-    for mask, pose in zip(silhouettes, scene.get_camera_poses(scene_id)):
-        # show mask
-        mask = np.zeros_like(mask)
-        silhouette = o3d.geometry.Image(mask.astype(np.float32))
-        extriniscs = np.linalg.inv(pose.tf)
-        intrinsic = scene.get_camera_info_scene(scene_id).as_o3d()
-        #set fx and fy to width half
-        width = intrinsic.width
-        height = intrinsic.height
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(width, height, width / 2, width / 2, width / 2, height / 2)
-
-        cam = o3d.camera.PinholeCameraParameters()
-        cam.intrinsic = intrinsic
-        cam.extrinsic = extriniscs
-
-        voxel_carving_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
-        print(voxel_carving_grid)
-    exit()
-    #put a spehere at every camera pose
-    speres = []
-    for camera_pose in camera_extrinsics:
-
-        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.01)
-        sphere.paint_uniform_color([1, 0, 0])  # Red color
-        sphere.translate(camera_pose[:3, 3])
-        speres.append(sphere)
-    # o3d.visualization.draw_geometries([voxel_carving_grid]+speres)
-
-
-    for mask, pose in zip(silhouettes, scene.get_camera_poses(scene_id)):
+    for mask, pose in zip(silhouettes, camera_poses):
         # show mask
         silhouette = o3d.geometry.Image(mask.astype(np.float32))
-        extriniscs = np.linalg.inv(pose.tf)
+        extrinsic = np.linalg.inv(pose.tf)
         intrinsic = scene.get_camera_info_scene(scene_id).as_o3d()
 
         cam = o3d.camera.PinholeCameraParameters()
         cam.intrinsic = intrinsic
-        cam.extrinsic = extriniscs
+        cam.extrinsic = extrinsic
 
         voxel_carving_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
         print(voxel_carving_grid)
+        
+    o3d.visualization.draw_geometries([voxel_carving_grid])
 
-    print("--- %s seconds ---" % (time.time() - start_time))
-
-    o3d.visualization.draw_geometries([voxel_carving_grid]+speres)
