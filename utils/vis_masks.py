@@ -9,7 +9,7 @@ import trimesh
 import yaml
 import open3d as o3d
 import copy
-from v4r import SceneFileReader
+from utils.v4r import SceneFileReader
 
 if 'pyrender' in sys.modules:
     raise ImportError(
@@ -24,7 +24,6 @@ import OpenGL.GL
 suppress_multisampling = True
 old_gl_enable = OpenGL.GL.glEnable
 
-
 def new_gl_enable(value):
     if suppress_multisampling and value == OpenGL.GL.GL_MULTISAMPLE:
         OpenGL.GL.glDisable(value)
@@ -36,7 +35,6 @@ OpenGL.GL.glEnable = new_gl_enable
 
 old_glRenderbufferStorageMultisample = OpenGL.GL.glRenderbufferStorageMultisample
 
-
 def new_glRenderbufferStorageMultisample(target, samples, internalformat, width, height):
     if suppress_multisampling:
         OpenGL.GL.glRenderbufferStorage(target, internalformat, width, height)
@@ -47,10 +45,8 @@ def new_glRenderbufferStorageMultisample(target, samples, internalformat, width,
 
 OpenGL.GL.glRenderbufferStorageMultisample = new_glRenderbufferStorageMultisample
 
-
 import pyrender
 from PIL import Image
-
 
 groundtruth_to_pyrender = np.array([[1, 0, 0, 0],
                                     [0, -1, 0, 0],
@@ -129,7 +125,6 @@ def get_bbox_from_masks(masks):
             bboxes.append(None)
     return bboxes
 
-
 def put_text(text, img, x, y, color):
     (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1, 1)
 
@@ -138,29 +133,25 @@ def put_text(text, img, x, y, color):
                       cv2.FONT_HERSHEY_SIMPLEX, 1, [255, 255, 255], 1)
 
 
-def load_object_models(scene_file_reader):
-    oriented_models = []
-    # Load poses
-    objects = scene_file_reader.get_object_poses(args.scene_id)
-    for object in tqdm(objects, desc="Loading objects"):
-        scene_object = scene_file_reader.object_library[object[0].id]
-        model = scene_object.mesh.as_trimesh()
-        model.apply_transform(np.array(object[1]).reshape(4, 4))
-        oriented_models.append(model)
-    return oriented_models
 
-def create_masks(dataset, scene_id, output):
-    if output:
-        if not os.path.exists(output):
-            print(f"Output path {output} does not exist.")
-            #create output directory
-            os.makedirs(output)
+def create_masks(scene_file_reader, scene_id, output=None):
 
-    scene_file_reader = SceneFileReader.create(dataset)
+    if output is None:
+        output = os.path.join(
+            scene_file_reader.root_dir,
+            scene_file_reader.scenes_dir, 
+            scene_id, 
+            scene_file_reader.mask_dir)
+
+    if not os.path.exists(output):
+        print(f"Output path {output} does not exist.")
+        #create output directory
+        os.makedirs(output)
+
     camera_poses = scene_file_reader.get_camera_poses(scene_id)
     intrinsic = scene_file_reader.get_camera_info_scene(scene_id)
     objects = scene_file_reader.get_object_poses(scene_id)
-    oriented_models = load_object_models(scene_file_reader)
+    oriented_models = scene_file_reader.load_object_models(scene_id)
 
     model_colors = []
     for i, object in enumerate(objects):

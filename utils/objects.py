@@ -4,7 +4,7 @@ import numpy as np
 import os
 import yaml
 
-from meshreader import MeshReader
+from utils.meshreader import MeshReader
 
 
 class Object:

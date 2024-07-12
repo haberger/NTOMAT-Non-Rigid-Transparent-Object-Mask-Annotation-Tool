@@ -5,9 +5,10 @@ import yaml
 import glob
 import math
 import errno
+from tqdm import tqdm
 
-from objects import ObjectLibrary
-from meshreader import MeshReader
+from utils.objects import ObjectLibrary
+from utils.meshreader import MeshReader
 
 
 def get_file_list(path, extensions):
@@ -368,3 +369,14 @@ class SceneFileReader:
         else:
             print(f"File {full_path} for  auto-align does not exist.")
             return None
+
+    def load_object_models(self, scene_id):
+        oriented_models = []
+        # Load poses
+        objects = self.get_object_poses(scene_id)
+        for object in tqdm(objects, desc="Loading objects"):
+            scene_object = self.object_library[object[0].id]
+            model = scene_object.mesh.as_trimesh()
+            model.apply_transform(np.array(object[1]).reshape(4, 4))
+            oriented_models.append(model)
+        return oriented_models
