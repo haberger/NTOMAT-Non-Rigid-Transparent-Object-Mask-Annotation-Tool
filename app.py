@@ -8,7 +8,7 @@ import cv2
 
 DATASET_PATH = None
 
-shortcut_js = """
+js_events = """
 <script>
 function clickHandler(e) {
     var image_input = document.getElementById("image").querySelector('img');
@@ -70,7 +70,7 @@ def main(dataset_path):
     # Load image as np array from path 
     im = cv2.imread(str(dataset_path / 'scenes' / scene_folders[0] / 'rgb' / '000001.png'))
 
-    with gr.Blocks(head=shortcut_js) as demo:
+    with gr.Blocks(head=js_events) as demo:
         status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
 
         # Create a dropdown to select a scene
