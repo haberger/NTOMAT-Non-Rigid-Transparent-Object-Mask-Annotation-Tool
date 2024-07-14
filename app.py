@@ -4,8 +4,6 @@ from pathlib import Path
 import time
 import utils.vis_masks as vis_masks
 from utils.v4r import SceneFileReader
-import os
-import yaml
 import cv2
 
 DATASET_PATH = None
@@ -13,16 +11,19 @@ DATASET_PATH = None
 shortcut_js = """
 <script>
 function clickHandler(e) {
-    var textbox = document.querySelector('textarea');
-    var image_input = document.querySelector('img');
+    var image_input = document.getElementById("image").querySelector('img');
     if (!image_input) return; // Make sure the image element exists
+
+    var imgWidth = image_input.width;
+    var imgHeight = image_input.height;
+
     var rect = image_input.getBoundingClientRect();
     var x = e.clientX - rect.left;
     var y = e.clientY - rect.top;
     var button_label = e.button == 2 ? "right" : "left";
-    textbox.value = `Clicked at (${Math.round(x)}, ${Math.round(y)}) with ${button_label} button`;
-    // Update the Gradio component with the click data
-    gradioApp().getComponentById('image_input').handleSelect({index: [x, y], value: button_label});
+    var js_parser = document.getElementById("js_parser").querySelector('textarea');
+    js_parser.value = `${Math.round(x)} ${Math.round(y)} ${button_label} ${imgWidth} ${imgHeight}`;    
+    js_parser.dispatchEvent(new Event('input', { bubbles: true }));
     e.preventDefault(); // Prevent the context menu from appearing
 }
 document.addEventListener('mousedown', clickHandler, false);
@@ -49,11 +50,16 @@ def load_scene(scene_id):
             gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
             yield f"Loading Scene {scene_id}: Generating missing masks"
             vis_masks.create_masks(scene, scene_id)
+
     yield f"Loaded Scene {scene_id}!"
 
-def get_click_data(image, evt: gr.SelectData):
-    print("HI")
+def click_image(image, evt: gr.SelectData):
     return
+
+def js_trigger(input_data):
+    data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
+    print(data)
+    return -1
 
 def main(dataset_path):
     global DATASET_PATH
@@ -72,10 +78,11 @@ def main(dataset_path):
             choices = scene_folders,
             label = "Select a Scene"
         )
-        output_text = gr.Textbox(label="Click Coordinates (and Segmentation)")
-        image_input = gr.Image(label="Upload Image", elem_id="image_input")
+        js_box = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
+        image_input = gr.Image(label="Upload Image", elem_id="image")
         selected_folder.change(load_scene, inputs=[selected_folder], outputs=[status_md])
-        image_input.select(get_click_data, [image_input])
+        image_input.select(click_image, [image_input])
+        js_box.input(js_trigger, js_box, js_box)
     demo.queue()
     demo.launch()
     
