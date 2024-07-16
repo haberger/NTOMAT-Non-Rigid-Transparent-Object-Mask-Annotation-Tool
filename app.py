@@ -8,6 +8,7 @@ import cv2
 from segment_anything import sam_model_registry, SamPredictor
 import numpy as np
 from matplotlib import pyplot as plt
+from dataclasses import dataclass
 
 DATASET_PATH = None
 image_height = None
@@ -38,6 +39,12 @@ document.addEventListener('contextmenu', function(e) {
 """
 
 
+@dataclass
+class PromptObject:
+    prompts: list
+    mask: np.ndarray
+    label: str
+
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -59,7 +66,7 @@ def show_box(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
 
 def load_scene(scene_id):
-    yield f"Loading Scene {scene_id}:"
+    yield f"Loading Scene {scene_id}:", None
 
     scene = SceneFileReader.create(DATASET_PATH / 'config.cfg')
 
@@ -67,16 +74,20 @@ def load_scene(scene_id):
     masks_dir = Path(scene.root_dir) / scene.scenes_dir / scene_id / scene.mask_dir
 
     if not masks_dir.exists(): 
-        yield f"Loading Scene {scene_id}: Generating missing masks"
+        yield f"Loading Scene {scene_id}: Generating missing masks", None
         vis_masks.create_masks(scene, scene_id)
     else:
         expected_mask_count = len(scene.get_object_poses(scene_id)) * len(scene.get_camera_poses(scene_id))
         if expected_mask_count != len(list(masks_dir.iterdir())):
             gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-            yield f"Loading Scene {scene_id}: Generating missing masks"
+            yield f"Loading Scene {scene_id}: Generating missing masks", None
             vis_masks.create_masks(scene, scene_id)
 
-    yield f"Loaded Scene {scene_id}!"
+    # Load first image of scene as default np array from path
+    rgb_img_path = scene.get_images_rgb_path(scene_id)[0]
+    im = cv2.imread(str(rgb_img_path))
+    im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+    yield f"Loaded Scene {scene_id}!", im
 
 def click_image(image, evt: gr.SelectData):
     return
@@ -89,34 +100,34 @@ def js_trigger(input_data, image):
         return -1, image
     elif True:
         print("Image Clicked")
-        print(image.shape)
-        print(image.dtype)
-        input_point = np.array([[int(data['x']), int(data['y'])]], dtype=np.int64)
-        input_label = np.array([1], dtype=np.int64)
+        # print(image.shape)
+        # print(image.dtype)
+        # input_point = np.array([[int(data['x']), int(data['y'])]], dtype=np.int64)
+        # input_label = np.array([1], dtype=np.int64)
 
-        masks, scores, logits = predictor.predict(
-            point_coords=input_point,
-            point_labels=input_label,
-            multimask_output=True,
-        )
-        # for i, (mask, score) in enumerate(zip(masks, scores)):
-        #     plt.figure(figsize=(10,10))
-        #     plt.imshow(image)
-        #     show_mask(mask, plt.gca())
-        #     show_points(input_point, input_label, plt.gca())
-        #     plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
-        #     plt.axis('off')
-        #     plt.savefig(f"mask{i}.png")  
+        # masks, scores, logits = predictor.predict(
+        #     point_coords=input_point,
+        #     point_labels=input_label,
+        #     multimask_output=True,
+        # )
+        # # for i, (mask, score) in enumerate(zip(masks, scores)):
+        # #     plt.figure(figsize=(10,10))
+        # #     plt.imshow(image)
+        # #     show_mask(mask, plt.gca())
+        # #     show_points(input_point, input_label, plt.gca())
+        # #     plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+        # #     plt.axis('off')
+        # #     plt.savefig(f"mask{i}.png")  
 
-        #overlay mask with image using alpha blending
-        mask = masks[0]
-        color = np.array([30/255, 144/255, 255/255, 0.6])
-        h, w = mask.shape[-2:]
-        mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-        mask_image = (mask_image * 255).astype(np.uint8)
-        mask_image = cv2.cvtColor(mask_image, cv2.COLOR_RGBA2RGB)
-        mask_image = cv2.resize(mask_image, (image.shape[1], image.shape[0]))
-        image = cv2.addWeighted(image, 0.5, mask_image, 0.5, 0)
+        # #overlay mask with image using alpha blending
+        # mask = masks[0]
+        # color = np.array([30/255, 144/255, 255/255, 0.6])
+        # h, w = mask.shape[-2:]
+        # mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+        # mask_image = (mask_image * 255).astype(np.uint8)
+        # mask_image = cv2.cvtColor(mask_image, cv2.COLOR_RGBA2RGB)
+        # mask_image = cv2.resize(mask_image, (image.shape[1], image.shape[0]))
+        # image = cv2.addWeighted(image, 0.5, mask_image, 0.5, 0)
         return  -1, image
     return -1, image
 
@@ -130,19 +141,19 @@ def main(dataset_path):
 
     device = "cuda"
 
-    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-    sam.to(device=device)
+    # sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+    # sam.to(device=device)
 
-    predictor = SamPredictor(sam)
+    # predictor = SamPredictor(sam)
 
     # Get list of folders in dataset_path
     scene_folders = sorted([f.stem for f in (dataset_path / 'scenes').iterdir() if f.is_dir()])
 
     # Load image as np array from path 
-    im = cv2.imread(str(dataset_path / 'scenes' / scene_folders[0] / 'rgb' / '000001.png'))
-    im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+    # im = cv2.imread(str(dataset_path / 'scenes' / scene_folders[0] / 'rgb' / '000001.png'))
+    # im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 
-    predictor.set_image(im)
+    # predictor.set_image(im)
 
     with gr.Blocks(head=js_events) as demo:
         status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
@@ -153,10 +164,10 @@ def main(dataset_path):
             label = "Select a Scene"
         )
         js_box = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
-        image_input = gr.Image(label="Upload Image", elem_id="image", value=im)
-        selected_folder.change(load_scene, inputs=[selected_folder], outputs=[status_md])
-        image_input.select(click_image, [image_input])
-        js_box.input(js_trigger, [js_box, image_input], [js_box, image_input])
+        prompting_image = gr.Image(label="Upload Image", elem_id="image")
+        selected_folder.change(load_scene, inputs=[selected_folder], outputs=[status_md, prompting_image])
+        prompting_image.select(click_image, [prompting_image])
+        js_box.input(js_trigger, [js_box, prompting_image], [js_box, prompting_image])
     demo.queue()
     demo.launch()
     
