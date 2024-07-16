@@ -14,10 +14,14 @@ DATASET_PATH = None
 image_height = None
 image_width = None
 predictor = None
+prompter = None
+scene_reader = None
+
+
 js_events = """
 <script>
 function clickHandler(e) {
-    var image_input = document.getElementById("image").querySelector('img');
+    var image_input = document.getElementById("prompting_image").querySelector('img');
     if (!image_input) return; // Make sure the image element exists
 
     var imgWidth = image_input.width;
@@ -43,19 +47,19 @@ document.addEventListener('contextmenu', function(e) {
 </script>
 """
 
-custom_css = """
-/* Disable the fade-in animation for images */
-.gr-image {
-    animation: none !important;
-    transition: none !important;
-}
-"""
-
 @dataclass
 class PromptObject:
     prompts: list
     mask: np.ndarray
     label: str
+
+@dataclass
+class Prompter:
+    prompt_objects: list
+    image: Path
+    scene_id: str
+    active_object: int
+    
 
 def show_mask(mask, ax, random_color=False):
     if random_color:
@@ -77,75 +81,93 @@ def show_box(box, ax):
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
 
-def load_scene(scene_id):
-    yield f"Loading Scene {scene_id}:", None
+def load_scene(scene_id, img_selection):
+    global scene_reader
+    global prompter
 
-    scene = SceneFileReader.create(DATASET_PATH / 'config.cfg')
+    yield f"Loading Scene {scene_id}:", None, img_selection
 
     # Check if masks directory exists
-    masks_dir = Path(scene.root_dir) / scene.scenes_dir / scene_id / scene.mask_dir
+    masks_dir = Path(scene_reader.root_dir) / scene_reader.scenes_dir / scene_id / scene_reader.mask_dir
 
     if not masks_dir.exists(): 
-        yield f"Loading Scene {scene_id}: Generating missing masks", None
-        vis_masks.create_masks(scene, scene_id)
+        yield f"Loading Scene {scene_id}: Generating missing masks", None, img_selection
+        vis_masks.create_masks(scene_reader, scene_id)
     else:
-        expected_mask_count = len(scene.get_object_poses(scene_id)) * len(scene.get_camera_poses(scene_id))
+        expected_mask_count = len(scene_reader.get_object_poses(scene_id)) * len(scene_reader.get_camera_poses(scene_id))
         if expected_mask_count != len(list(masks_dir.iterdir())):
             gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-            yield f"Loading Scene {scene_id}: Generating missing masks", None
-            vis_masks.create_masks(scene, scene_id)
+            yield f"Loading Scene {scene_id}: Generating missing masks", None, img_selection
+            vis_masks.create_masks(scene_reader, scene_id)
 
     # Load first image of scene as default np array from path
-    rgb_img_path = scene.get_images_rgb_path(scene_id)[0]
-    im = cv2.imread(str(rgb_img_path))
-    im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
-    yield f"Loaded Scene {scene_id}!", im
+    rgb_imgs_path = scene_reader.get_images_rgb_path(scene_id)
+    rgb_imgs_path = [Path(p) for p in rgb_imgs_path]
+
+    img_selection = gr.Dropdown(
+        value = rgb_imgs_path[0].name, 
+        choices = [f.name for f in rgb_imgs_path],
+        label = "Select an Image",
+        visible=True
+    )
+
+    prompter = Prompter([], None, scene_id, None)
+
+    yield f"Loaded Scene {scene_id}!", img_selection
 
 def click_image(image, evt: gr.SelectData):
     return
 
 def js_trigger(input_data, image):
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
-    #TODO factor in image size -> if scaled, need to scale back to original size
     print(data)
-    if int(data['x']) < 0 or int(data['x']) > int(data['imgWidth']) or int(data['y']) < 0 or int(data['y']) > int(data['imgHeight']):
-        return -1, None
-    elif True:
-        print("Image Clicked")
-        # print(image.shape)
-        # print(image.dtype)
-        # input_point = np.array([[int(data['x']), int(data['y'])]], dtype=np.int64)
-        # input_label = np.array([1], dtype=np.int64)
+    #TODO factor in image size -> if scaled, need to scale back to original size
 
-        # masks, scores, logits = predictor.predict(
-        #     point_coords=input_point,
-        #     point_labels=input_label,
-        #     multimask_output=True,
-        # )
-        # # for i, (mask, score) in enumerate(zip(masks, scores)):
-        # #     plt.figure(figsize=(10,10))
-        # #     plt.imshow(image)
-        # #     show_mask(mask, plt.gca())
-        # #     show_points(input_point, input_label, plt.gca())
-        # #     plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
-        # #     plt.axis('off')
-        # #     plt.savefig(f"mask{i}.png")  
+    print("Image Clicked")
+    input_point = np.array([[int(data['x']), int(data['y'])]])
+    input_label = np.array([0]) if data['button'] == 'right' else np.array([1])
 
-        # #overlay mask with image using alpha blending
-        # mask = masks[0]
-        # color = np.array([30/255, 144/255, 255/255, 0.6])
-        # h, w = mask.shape[-2:]
-        # mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-        # mask_image = (mask_image * 255).astype(np.uint8)
-        # mask_image = cv2.cvtColor(mask_image, cv2.COLOR_RGBA2RGB)
-        # mask_image = cv2.resize(mask_image, (image.shape[1], image.shape[0]))
-        # image = cv2.addWeighted(image, 0.5, mask_image, 0.5, 0)
-        return  -1, image
-    return -1, image
+    # masks, scores, logits = predictor.predict(
+    #     point_coords=input_point,
+    #     point_labels=input_label,
+    #     multimask_output=True,
+    # )
+    # # for i, (mask, score) in enumerate(zip(masks, scores)):
+    # #     plt.figure(figsize=(10,10))
+    # #     plt.imshow(image)
+    # #     show_mask(mask, plt.gca())
+    # #     show_points(input_point, input_label, plt.gca())
+    # #     plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
+    # #     plt.axis('off')
+    # #     plt.savefig(f"mask{i}.png")  
+
+    # #overlay mask with image using alpha blending
+    # mask = masks[0]
+    # color = np.array([30/255, 144/255, 255/255, 0.6])
+    # h, w = mask.shape[-2:]
+    # mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
+    # mask_image = (mask_image * 255).astype(np.uint8)
+    # mask_image = cv2.cvtColor(mask_image, cv2.COLOR_RGBA2RGB)
+    # mask_image = cv2.resize(mask_image, (image.shape[1], image.shape[0]))
+    # image = cv2.addWeighted(image, 0.5, mask_image, 0.5, 0)
+    return  -1, image
+
+def change_image(img_selection):
+    global prompter
+    global scene_reader
+    if prompter.image is not None:
+        #TODO save prompter
+        pass
+
+    prompter.image = Path(scene_reader.root_dir)/scene_reader.scenes_dir/prompter.scene_id/scene_reader.rgb_dir/img_selection
+    return cv2.cvtColor(cv2.imread(str(prompter.image)), cv2.COLOR_BGR2RGB)
+
 
 def main(dataset_path):
     global DATASET_PATH
+    global prompter
     global predictor
+    global scene_reader
     DATASET_PATH = dataset_path
 
     sam_checkpoint = "model_checkpoints/sam_vit_h_4b8939.pth"
@@ -159,25 +181,30 @@ def main(dataset_path):
     # predictor = SamPredictor(sam)
 
     # Get list of folders in dataset_path
+    scene_reader = SceneFileReader.create(dataset_path / 'config.cfg')
     scene_folders = sorted([f.stem for f in (dataset_path / 'scenes').iterdir() if f.is_dir()])
-
-    # Load image as np array from path 
-    # im = cv2.imread(str(dataset_path / 'scenes' / scene_folders[0] / 'rgb' / '000001.png'))
-    # im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
 
     # predictor.set_image(im)
 
-    with gr.Blocks(head=js_events, css=custom_css) as demo:
+    with gr.Blocks(head=js_events) as demo:
         status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
-
+        # prompting_state = gr.State()
         # Create a dropdown to select a scene
-        selected_folder = gr.Dropdown(
-            choices = scene_folders,
-            label = "Select a Scene"
-        )
+        with gr.Row():
+            folder_selection = gr.Dropdown(
+                choices = scene_folders,
+                label = "Select a Scene"
+            )
+            img_selection = gr.Dropdown(
+                choices = [],
+                label = "Select an Image",
+                visible=False
+            )
         js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
-        prompting_image = gr.Image(label="Upload Image", elem_id="image")
-        selected_folder.change(load_scene, inputs=[selected_folder], outputs=[status_md, prompting_image])
+        # #IDEA maybe hide until scene is selected 
+        prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images") 
+        folder_selection.change(load_scene, inputs=[folder_selection, img_selection], outputs=[status_md, img_selection])
+        img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
         js_parser.input(js_trigger, [js_parser, prompting_image], [js_parser, prompting_image])
     demo.queue()
