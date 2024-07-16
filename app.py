@@ -26,6 +26,11 @@ function clickHandler(e) {
     var rect = image_input.getBoundingClientRect();
     var x = e.clientX - rect.left;
     var y = e.clientY - rect.top;
+
+    if (x < 0 || x > imgWidth || y < 0 || y > imgHeight) {
+        return;
+    }
+
     var button_label = e.button == 2 ? "right" : "left";
     var js_parser = document.getElementById("js_parser").querySelector('textarea');
     js_parser.value = `${Math.round(x)} ${Math.round(y)} ${button_label} ${imgWidth} ${imgHeight}`;    
@@ -38,6 +43,13 @@ document.addEventListener('contextmenu', function(e) {
 </script>
 """
 
+custom_css = """
+/* Disable the fade-in animation for images */
+.gr-image {
+    animation: none !important;
+    transition: none !important;
+}
+"""
 
 @dataclass
 class PromptObject:
@@ -97,7 +109,7 @@ def js_trigger(input_data, image):
     #TODO factor in image size -> if scaled, need to scale back to original size
     print(data)
     if int(data['x']) < 0 or int(data['x']) > int(data['imgWidth']) or int(data['y']) < 0 or int(data['y']) > int(data['imgHeight']):
-        return -1, image
+        return -1, None
     elif True:
         print("Image Clicked")
         # print(image.shape)
@@ -155,7 +167,7 @@ def main(dataset_path):
 
     # predictor.set_image(im)
 
-    with gr.Blocks(head=js_events) as demo:
+    with gr.Blocks(head=js_events, css=custom_css) as demo:
         status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
 
         # Create a dropdown to select a scene
@@ -163,11 +175,11 @@ def main(dataset_path):
             choices = scene_folders,
             label = "Select a Scene"
         )
-        js_box = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
+        js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
         prompting_image = gr.Image(label="Upload Image", elem_id="image")
         selected_folder.change(load_scene, inputs=[selected_folder], outputs=[status_md, prompting_image])
         prompting_image.select(click_image, [prompting_image])
-        js_box.input(js_trigger, [js_box, prompting_image], [js_box, prompting_image])
+        js_parser.input(js_trigger, [js_parser, prompting_image], [js_parser, prompting_image])
     demo.queue()
     demo.launch()
     
