@@ -50,7 +50,9 @@ document.addEventListener('contextmenu', function(e) {
 @dataclass
 class PromptObject:
     prompts: list
+    prompts_label: list
     mask: np.ndarray
+    logit: np.ndarray
     label: str
 
 @dataclass
@@ -59,8 +61,43 @@ class Prompter:
     image: Path
     scene_id: str
     active_object: int
-    
 
+    def generate_visualization(self):
+        image = cv2.imread(str(self.image))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        overlay = image.copy()
+
+        light_blue = (73, 116, 130)
+        light_red = (155, 82, 93)
+
+        for i, prompt_obj in enumerate(self.prompt_objects):
+            color = light_red
+            if i == self.active_object:
+                color = light_blue
+
+            mask = prompt_obj.mask.astype(np.uint8)
+
+            colored_mask = np.zeros_like(image)
+            colored_mask[mask > 0] = color
+
+            overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.5, 0)
+
+        for i, prompt_obj in enumerate(self.prompt_objects):
+            color = (255, 0, 0)
+            if i == self.active_object:
+                color = (0, 0, 255)
+
+            contours, _ = cv2.findContours(prompt_obj.mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, contours, -1, color, 2)
+
+        active_prompt_obj = self.prompt_objects[self.active_object]
+        for (x, y), label in zip(active_prompt_obj.prompts, active_prompt_obj.prompts_label):
+            dot_color = (0, 255, 0) if label == 1 else (255, 0, 0)
+            cv2.circle(overlay, (x, y), 5, dot_color, -1)
+
+        return overlay
+    
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -119,48 +156,73 @@ def click_image(image, evt: gr.SelectData):
     return
 
 def js_trigger(input_data, image):
+    global prompter
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
     print(data)
     #TODO factor in image size -> if scaled, need to scale back to original size
 
     print("Image Clicked")
-    input_point = np.array([[int(data['x']), int(data['y'])]])
-    input_label = np.array([0]) if data['button'] == 'right' else np.array([1])
 
-    # masks, scores, logits = predictor.predict(
-    #     point_coords=input_point,
-    #     point_labels=input_label,
-    #     multimask_output=True,
-    # )
-    # # for i, (mask, score) in enumerate(zip(masks, scores)):
-    # #     plt.figure(figsize=(10,10))
-    # #     plt.imshow(image)
-    # #     show_mask(mask, plt.gca())
-    # #     show_points(input_point, input_label, plt.gca())
-    # #     plt.title(f"Mask {i+1}, Score: {score:.3f}", fontsize=18)
-    # #     plt.axis('off')
-    # #     plt.savefig(f"mask{i}.png")  
+    # if first predict full
+    #take best mask and visualize
+    #take best logit and use for further predictions
 
-    # #overlay mask with image using alpha blending
-    # mask = masks[0]
-    # color = np.array([30/255, 144/255, 255/255, 0.6])
-    # h, w = mask.shape[-2:]
-    # mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    # mask_image = (mask_image * 255).astype(np.uint8)
-    # mask_image = cv2.cvtColor(mask_image, cv2.COLOR_RGBA2RGB)
-    # mask_image = cv2.resize(mask_image, (image.shape[1], image.shape[0]))
-    # image = cv2.addWeighted(image, 0.5, mask_image, 0.5, 0)
+    input_point = [[int(data['x']), int(data['y'])]]
+    input_label = [0] if data['button'] == 'right' else [1]
+
+    if prompter.active_object is None:
+        masks, scores, logits = predictor.predict(
+            point_coords=np.array(input_point),
+            point_labels=np.array(input_label),
+            multimask_output=True,
+        )
+        
+        best_mask = masks[np.argmax(scores), :, :]
+        best_logit = logits[np.argmax(scores), :, :]
+        prompt_object = PromptObject(input_point, input_label, best_mask, best_logit, "test")
+        prompter.prompt_objects.append(prompt_object)
+        prompter.active_object = 0
+    else:
+        prompt_object = prompter.prompt_objects[prompter.active_object]
+
+        # input_point = np.array([[500, 375], [1125, 625]])
+        # input_label = np.array([1, 1])
+
+        prompt_object.prompts.append([int(data['x']), int(data['y'])])
+        prompt_object.prompts_label.append(int(input_label[0]))
+
+        print(prompt_object.prompts)
+        print(prompt_object.prompts_label)
+        print(prompt_object.logit.shape)
+        mask, score, logit = predictor.predict(
+            point_coords=np.array(prompt_object.prompts),
+            point_labels=np.array(prompt_object.prompts_label),
+            mask_input = prompt_object.logit[None, :, :],
+            multimask_output=False,
+        )
+
+        prompt_object.mask = mask[0,:,:]
+        prompt_object.logit = logit[0,:,:]
+        prompter.prompt_objects[prompter.active_object] = prompt_object
+
+    print(prompt_object.mask.shape)
+
+    image = prompter.generate_visualization()
     return  -1, image
 
 def change_image(img_selection):
+    print("Image Changed")
     global prompter
     global scene_reader
+    global predictor
     if prompter.image is not None:
         #TODO save prompter
         pass
-
+    
     prompter.image = Path(scene_reader.root_dir)/scene_reader.scenes_dir/prompter.scene_id/scene_reader.rgb_dir/img_selection
-    return cv2.cvtColor(cv2.imread(str(prompter.image)), cv2.COLOR_BGR2RGB)
+    img = cv2.cvtColor(cv2.imread(str(prompter.image)), cv2.COLOR_BGR2RGB)
+    predictor.set_image(img)
+    return img
 
 
 def main(dataset_path):
@@ -175,10 +237,10 @@ def main(dataset_path):
 
     device = "cuda"
 
-    # sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-    # sam.to(device=device)
+    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
+    sam.to(device=device)
 
-    # predictor = SamPredictor(sam)
+    predictor = SamPredictor(sam)
 
     # Get list of folders in dataset_path
     scene_reader = SceneFileReader.create(dataset_path / 'config.cfg')
