@@ -2,102 +2,45 @@ import gradio as gr
 import argparse
 from pathlib import Path
 import time
-import utils.vis_masks as vis_masks
-from utils.v4r import SceneFileReader
 import cv2
 from segment_anything import sam_model_registry, SamPredictor
 import numpy as np
 from matplotlib import pyplot as plt
 from dataclasses import dataclass
+from annotation import AnnotationObject, AnnotationImage, AnnotationScene, AnnotationDataset
 
-DATASET_PATH = None
-image_height = None
-image_width = None
+dataset = None
 predictor = None
-prompter = None
-scene_reader = None
-
 
 js_events = """
 <script>
-function clickHandler(e) {
-    var image_input = document.getElementById("prompting_image").querySelector('img');
-    if (!image_input) return; // Make sure the image element exists
-
-    var imgWidth = image_input.width;
-    var imgHeight = image_input.height;
-
-    var rect = image_input.getBoundingClientRect();
+function getMousePosition(e, image) {
+    var rect = image.getBoundingClientRect();
     var x = e.clientX - rect.left;
     var y = e.clientY - rect.top;
-
-    if (x < 0 || x > imgWidth || y < 0 || y > imgHeight) {
-        return;
-    }
-
-    var button_label = e.button == 2 ? "right" : "left";
-    var js_parser = document.getElementById("js_parser").querySelector('textarea');
-    js_parser.value = `${Math.round(x)} ${Math.round(y)} ${button_label} ${imgWidth} ${imgHeight}`;    
-    js_parser.dispatchEvent(new Event('input', { bubbles: true }));
+    return { x: Math.round(x), y: Math.round(y) };
 }
-document.addEventListener('mousedown', clickHandler, false);
-document.addEventListener('contextmenu', function(e) {
-    e.preventDefault(); // Prevent the context menu from appearing
-}, false);
+
+function handleMouseClick(e) {
+    if (e.target.tagName !== 'IMG') return;
+    var image = e.target;
+    var { x, y } = getMousePosition(e, image);
+
+    var buttonLabel = e.button === 2 ? "right" : "left";
+    var jsParser = document.getElementById("js_parser").querySelector('textarea');
+    jsParser.value = `${x} ${y} ${buttonLabel} ${image.width} ${image.height}`;
+    jsParser.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function handleContextMenu(e) {
+    if (e.target.tagName == 'IMG'){
+        e.preventDefault();
+    }
+}
+document.addEventListener('mousedown', handleMouseClick, false);
+document.addEventListener('contextmenu', handleContextMenu, false);
 </script>
 """
 
-@dataclass
-class PromptObject:
-    prompts: list
-    prompts_label: list
-    mask: np.ndarray
-    logit: np.ndarray
-    label: str
-
-@dataclass
-class Prompter:
-    prompt_objects: list
-    image: Path
-    scene_id: str
-    active_object: int
-
-    def generate_visualization(self):
-        image = cv2.imread(str(self.image))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        overlay = image.copy()
-
-        light_blue = (73, 116, 130)
-        light_red = (155, 82, 93)
-
-        for i, prompt_obj in enumerate(self.prompt_objects):
-            color = light_red
-            if i == self.active_object:
-                color = light_blue
-
-            mask = prompt_obj.mask.astype(np.uint8)
-
-            colored_mask = np.zeros_like(image)
-            colored_mask[mask > 0] = color
-
-            overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.5, 0)
-
-        for i, prompt_obj in enumerate(self.prompt_objects):
-            color = (255, 0, 0)
-            if i == self.active_object:
-                color = (0, 0, 255)
-
-            contours, _ = cv2.findContours(prompt_obj.mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(overlay, contours, -1, color, 2)
-
-        active_prompt_obj = self.prompt_objects[self.active_object]
-        for (x, y), label in zip(active_prompt_obj.prompts, active_prompt_obj.prompts_label):
-            dot_color = (0, 255, 0) if label == 1 else (255, 0, 0)
-            cv2.circle(overlay, (x, y), 5, dot_color, -1)
-
-        return overlay
-    
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
@@ -118,28 +61,23 @@ def show_box(box, ax):
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
 
-def load_scene(scene_id, img_selection):
-    global scene_reader
-    global prompter
+def load_scene(scene_id, prompting_image):
+    global dataset
 
-    yield f"Loading Scene {scene_id}:", None, img_selection
+    prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True) 
 
-    # Check if masks directory exists
-    masks_dir = Path(scene_reader.root_dir) / scene_reader.scenes_dir / scene_id / scene_reader.mask_dir
+    yield f"Loading Scene {scene_id}:", None, gr.Dropdown(visible=False), prompting_image
+    scene = dataset.annotation_scenes[scene_id]
+    scene.load_images()
 
-    if not masks_dir.exists(): 
-        yield f"Loading Scene {scene_id}: Generating missing masks", None, img_selection
-        vis_masks.create_masks(scene_reader, scene_id)
-    else:
-        expected_mask_count = len(scene_reader.get_object_poses(scene_id)) * len(scene_reader.get_camera_poses(scene_id))
-        if expected_mask_count != len(list(masks_dir.iterdir())):
-            gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-            yield f"Loading Scene {scene_id}: Generating missing masks", None, img_selection
-            vis_masks.create_masks(scene_reader, scene_id)
+    #check if masks are present
+    if not scene.has_correct_number_of_masks():
+        gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
+        yield f"Loading Scene {scene_id}: Generating missing masks", None, gr.Dropdown(visible=False), prompting_image
+        scene.generate_masks()
 
-    # Load first image of scene as default np array from path
-    rgb_imgs_path = scene_reader.get_images_rgb_path(scene_id)
-    rgb_imgs_path = [Path(p) for p in rgb_imgs_path]
+
+    rgb_imgs_path = scene.scene_reader.get_images_rgb_path(scene_id)
 
     img_selection = gr.Dropdown(
         value = rgb_imgs_path[0].name, 
@@ -147,30 +85,52 @@ def load_scene(scene_id, img_selection):
         label = "Select an Image",
         visible=True
     )
+    dataset.active_scene = scene
+    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image
 
-    prompter = Prompter([], None, scene_id, None)
 
-    yield f"Loaded Scene {scene_id}!", img_selection
+def change_image(img_selection):
+    global dataset
+    global predictor
+    print("Image Changed")
+    start_time = time.time()    
+
+    scene = dataset.active_scene
+
+    if scene.active_image is not None:
+        #TODO handle saving of prompter
+        pass
+
+    # check if annotations already exist
+    scene.active_image = scene.annotation_images[img_selection]
+
+    if scene.active_image.annotation_objects:
+        image = scene.active_image.generate_visualization()
+    else:
+        image = cv2.cvtColor(cv2.imread(scene.active_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+    predictor.set_image(image)
+    print(f"Image changed in {time.time() - start_time:.2f} seconds")
+
+    return image
 
 def click_image(image, evt: gr.SelectData):
     return
 
 def js_trigger(input_data, image):
-    global prompter
+    global dataset
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
     print(data)
     #TODO factor in image size -> if scaled, need to scale back to original size
 
     print("Image Clicked")
 
-    # if first predict full
-    #take best mask and visualize
-    #take best logit and use for further predictions
-
     input_point = [[int(data['x']), int(data['y'])]]
     input_label = [0] if data['button'] == 'right' else [1]
 
-    if prompter.active_object is None:
+    active_image = dataset.active_scene.active_image
+
+    if active_image.active_object is None:
         masks, scores, logits = predictor.predict(
             point_coords=np.array(input_point),
             point_labels=np.array(input_label),
@@ -179,58 +139,39 @@ def js_trigger(input_data, image):
         
         best_mask = masks[np.argmax(scores), :, :]
         best_logit = logits[np.argmax(scores), :, :]
-        prompt_object = PromptObject(input_point, input_label, best_mask, best_logit, "test")
-        prompter.prompt_objects.append(prompt_object)
-        prompter.active_object = 0
+        annotation_object = AnnotationObject(input_point, input_label, best_mask, best_logit, "001")
+        active_image.annotation_objects[annotation_object.label] = annotation_object
+        active_image.active_object = annotation_object
     else:
-        prompt_object = prompter.prompt_objects[prompter.active_object]
+        annotation_object = active_image.active_object
 
         # input_point = np.array([[500, 375], [1125, 625]])
         # input_label = np.array([1, 1])
 
-        prompt_object.prompts.append([int(data['x']), int(data['y'])])
-        prompt_object.prompts_label.append(int(input_label[0]))
+        annotation_object.prompts.append([int(data['x']), int(data['y'])])
+        annotation_object.prompts_label.append(int(input_label[0]))
 
-        print(prompt_object.prompts)
-        print(prompt_object.prompts_label)
-        print(prompt_object.logit.shape)
+        print(annotation_object.prompts)
+        print(annotation_object.prompts_label)
+        print(annotation_object.logit.shape)
         mask, score, logit = predictor.predict(
-            point_coords=np.array(prompt_object.prompts),
-            point_labels=np.array(prompt_object.prompts_label),
-            mask_input = prompt_object.logit[None, :, :],
+            point_coords=np.array(annotation_object.prompts),
+            point_labels=np.array(annotation_object.prompts_label),
+            mask_input = annotation_object.logit[None, :, :],
             multimask_output=False,
         )
 
-        prompt_object.mask = mask[0,:,:]
-        prompt_object.logit = logit[0,:,:]
-        prompter.prompt_objects[prompter.active_object] = prompt_object
+        annotation_object.mask = mask[0,:,:]
+        annotation_object.logit = logit[0,:,:]
+        active_image.active_object = annotation_object
 
-    print(prompt_object.mask.shape)
-
-    image = prompter.generate_visualization()
+    image = active_image.generate_visualization()
     return  -1, image
 
-def change_image(img_selection):
-    print("Image Changed")
-    global prompter
-    global scene_reader
-    global predictor
-    if prompter.image is not None:
-        #TODO save prompter
-        pass
-    
-    prompter.image = Path(scene_reader.root_dir)/scene_reader.scenes_dir/prompter.scene_id/scene_reader.rgb_dir/img_selection
-    img = cv2.cvtColor(cv2.imread(str(prompter.image)), cv2.COLOR_BGR2RGB)
-    predictor.set_image(img)
-    return img
-
-
 def main(dataset_path):
-    global DATASET_PATH
-    global prompter
+    global dataset
     global predictor
-    global scene_reader
-    DATASET_PATH = dataset_path
+    dataset = AnnotationDataset(dataset_path)
 
     sam_checkpoint = "model_checkpoints/sam_vit_h_4b8939.pth"
     model_type = "vit_h"
@@ -242,30 +183,24 @@ def main(dataset_path):
 
     predictor = SamPredictor(sam)
 
-    # Get list of folders in dataset_path
-    scene_reader = SceneFileReader.create(dataset_path / 'config.cfg')
-    scene_folders = sorted([f.stem for f in (dataset_path / 'scenes').iterdir() if f.is_dir()])
-
-    # predictor.set_image(im)
-
     with gr.Blocks(head=js_events) as demo:
         status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
         # prompting_state = gr.State()
-        # Create a dropdown to select a scene
+
+        js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
+        # #IDEA maybe hide until scene is selected 
+        prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
         with gr.Row():
             folder_selection = gr.Dropdown(
-                choices = scene_folders,
-                label = "Select a Scene"
+                choices = dataset.get_scene_ids(),
+                label = "Select a Scene",
             )
             img_selection = gr.Dropdown(
                 choices = [],
                 label = "Select an Image",
-                visible=False
+                visible=False,
             )
-        js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
-        # #IDEA maybe hide until scene is selected 
-        prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images") 
-        folder_selection.change(load_scene, inputs=[folder_selection, img_selection], outputs=[status_md, img_selection])
+        folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image])
         img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
         js_parser.input(js_trigger, [js_parser, prompting_image], [js_parser, prompting_image])

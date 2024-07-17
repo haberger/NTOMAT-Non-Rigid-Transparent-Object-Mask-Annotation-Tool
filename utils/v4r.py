@@ -6,6 +6,7 @@ import glob
 import math
 import errno
 from tqdm import tqdm
+from pathlib import Path
 
 from utils.objects import ObjectLibrary
 from utils.meshreader import MeshReader
@@ -17,7 +18,7 @@ def get_file_list(path, extensions):
         for filename in files:
             if any(filename.endswith(extension) for extension in extensions):
                 filepath = os.path.join(root, filename)
-                file_list.append(filepath)
+                file_list.append(Path(filepath))
 
     return file_list
 
@@ -285,7 +286,7 @@ class SceneFileReader:
 
     def get_images_rgb(self, scene_id):
         files = self.get_images_rgb_path(scene_id)
-        return [o3d.io.read_image(file) for file in files]
+        return [o3d.io.read_image(str(file)) for file in files]
 
     def get_images_rgb_path(self, scene_id):
         full_path = os.path.join(
@@ -380,3 +381,6 @@ class SceneFileReader:
             model.apply_transform(np.array(object[1]).reshape(4, 4))
             oriented_models.append(model)
         return oriented_models
+    
+    def get_images_mask_path(self, scene_id):
+        return os.path.join(self.root_dir, self.scenes_dir, scene_id, self.mask_dir)
