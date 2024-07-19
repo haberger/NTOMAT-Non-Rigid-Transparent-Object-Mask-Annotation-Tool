@@ -56,12 +56,11 @@ def load_scene(scene_id, prompting_image):
         yield f"Loading Scene {scene_id}: Generating missing masks", None, gr.Dropdown(visible=False), prompting_image
         scene.generate_masks()
 
-
-    rgb_imgs_path = scene.scene_reader.get_images_rgb_path(scene_id)
+    rgb_imgs = scene.annotation_images.keys()
 
     img_selection = gr.Dropdown(
-        value = rgb_imgs_path[0].name, 
-        choices = [f.name for f in rgb_imgs_path],
+        value = list(rgb_imgs)[0], 
+        choices = rgb_imgs,
         label = "Select an Image",
         visible=True
     )
@@ -100,8 +99,13 @@ def change_image(img_selection):
 def click_image(image, evt: gr.SelectData):
     return
 
-def js_trigger(input_data, image):
+def js_trigger(input_data, image, annotation_objects_selection):
     global dataset
+
+    if annotation_objects_selection is None:
+        gr.Warning("Please add an object to annotate first", duration=3)
+        return -1, image
+
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
     print(data)
 
@@ -230,7 +234,7 @@ def main(dataset_path):
         prompting_image.select(click_image, [prompting_image])
         add_annotation_object_btn.click(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
         annotation_objects_selection.change(change_annotation_object, [annotation_objects_selection], [prompting_image])
-        js_parser.input(js_trigger, [js_parser, prompting_image], [js_parser, prompting_image])
+        js_parser.input(js_trigger, [js_parser, prompting_image, annotation_objects_selection], [js_parser, prompting_image])
     demo.queue()
     demo.launch()
     

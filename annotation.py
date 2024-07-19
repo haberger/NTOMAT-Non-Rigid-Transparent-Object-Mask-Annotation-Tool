@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 import utils.vis_masks as vis_masks
+import open3d as o3d
 
 @dataclass
 class AnnotationObject:
@@ -31,6 +32,8 @@ class AnnotationImage:
         light_red = (155, 82, 93)
 
         for prompt_obj in self.annotation_objects.values():
+            if prompt_obj.mask is None:
+                continue
             color = light_red
             if prompt_obj == self.active_object:
                 color = light_blue
@@ -41,7 +44,9 @@ class AnnotationImage:
 
             overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.5, 0)
 
-        for prompt_obj in self.annotation_objects.values():            
+        for prompt_obj in self.annotation_objects.values():       
+            if prompt_obj.mask is None:
+                continue     
             color = (255, 0, 0)
             if prompt_obj == self.active_object:
                 color = (0, 0, 255)
@@ -56,17 +61,25 @@ class AnnotationImage:
         return overlay
 
 class AnnotationScene:
-    def __init__(self, scene_id, scene_reader, camera_intrinsics):
+    def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
         self.scene_id = scene_id
         self.scene_reader = scene_reader
         self.annotation_images = {}
         self.active_image = None
         self.voxel_grid = None
         self.camera_intrinsics = camera_intrinsics
+        self.img_width = img_width
+        self.img_height = img_height
 
     def load_images(self):
         image_paths = self.scene_reader.get_images_rgb_path(self.scene_id)
         camera_poses = self.scene_reader.get_camera_poses(self.scene_id)
+
+        #perform smart camera pose ordering
+        reordering = self.max_distance_camera_reorder(camera_poses)
+        camera_poses = [camera_poses[i] for i in reordering]
+        image_paths = [image_paths[i] for i in reordering]
+
         for i, image_path in enumerate(image_paths):
             image_path = Path(image_path)
             self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i])
@@ -90,7 +103,22 @@ class AnnotationScene:
             if expected_mask_count != len(list(masks_dir.iterdir())):
                 return False
             return True
+        
+    def max_distance_camera_reorder(self, poses, k=5):
+        points = np.array([pose.translation() for pose in poses])
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
 
+        downsampled_points = np.asarray(pcd.farthest_point_down_sample(k).points)
+        #sort the downsampled list by z value decreasing
+        downsampled_points = downsampled_points[np.argsort(downsampled_points[:, 2])[::-1]]
+
+        # return reordering of original list so that the downsampled_points are first
+        
+        # find indices of poses in original list
+        indices = [np.where(points == pose)[0][0] for pose in downsampled_points]
+        full_odering = indices + [i for i in range(len(points)) if i not in indices]
+        return full_odering
 
 class AnnotationDataset:
     def __init__(self, dataset_path, config="config.cfg"):
@@ -105,7 +133,7 @@ class AnnotationDataset:
         for scene_id in scene_ids:
             camera = self.scene_reader.get_camera_info_scene(scene_id)
             camera_intrinsics = camera.as_numpy3x3()
-            self.annotation_scenes[scene_id] = AnnotationScene(scene_id, self.scene_reader, camera_intrinsics)
+            self.annotation_scenes[scene_id] = AnnotationScene(scene_id, self.scene_reader, camera_intrinsics, camera.width, camera.height)
 
     def get_scene_ids(self):
         return self.annotation_scenes.keys()
