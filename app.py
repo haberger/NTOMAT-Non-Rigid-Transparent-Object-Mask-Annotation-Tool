@@ -41,26 +41,6 @@ document.addEventListener('contextmenu', handleContextMenu, false);
 </script>
 """
 
-def show_mask(mask, ax, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-    else:
-        color = np.array([30/255, 144/255, 255/255, 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
-    
-def show_points(coords, labels, ax, marker_size=375):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
-    
-def show_box(box, ax):
-    x0, y0 = box[0], box[1]
-    w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
-
 def load_scene(scene_id, prompting_image):
     global dataset
 
@@ -121,8 +101,14 @@ def js_trigger(input_data, image):
     global dataset
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
     print(data)
-    #TODO factor in image size -> if scaled, need to scale back to original size
 
+    #factor in image size -> if scaled, need to scale back to original size
+    if data['imgWidth'] != dataset.active_scene.img_width or ['imgHeight'] != dataset.active_scene.img_height:
+        x = int(data['x']) * dataset.active_scene.img_width / int(data['imgWidth'])
+        y = int(data['y']) * dataset.active_scene.img_height / int(data['imgHeight'])
+        data['x'] = x
+        data['y'] = y
+    
     print("Image Clicked")
 
     input_point = [[int(data['x']), int(data['y'])]]
@@ -144,9 +130,6 @@ def js_trigger(input_data, image):
         active_image.active_object = annotation_object
     else:
         annotation_object = active_image.active_object
-
-        # input_point = np.array([[500, 375], [1125, 625]])
-        # input_label = np.array([1, 1])
 
         annotation_object.prompts.append([int(data['x']), int(data['y'])])
         annotation_object.prompts_label.append(int(input_label[0]))
@@ -189,7 +172,11 @@ def main(dataset_path):
 
         js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
         # #IDEA maybe hide until scene is selected 
-        prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
+        with gr.Row():
+            with gr.Column(scale=5):
+                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
+            with gr.Column(scale=.6):
+                text = gr.Textbox(label="Click on Image to Annotate", elem_id="prompting_text", elem_classes="images", visible=True)
         with gr.Row():
             folder_selection = gr.Dropdown(
                 choices = dataset.get_scene_ids(),
