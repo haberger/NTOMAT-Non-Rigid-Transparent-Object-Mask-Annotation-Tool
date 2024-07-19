@@ -75,6 +75,9 @@ def change_image(img_selection):
     print("Image Changed")
     start_time = time.time()    
 
+    if img_selection is None:
+        return None
+
     scene = dataset.active_scene
 
     if scene.active_image is not None:
@@ -116,40 +119,70 @@ def js_trigger(input_data, image):
 
     active_image = dataset.active_scene.active_image
 
-    if active_image.active_object is None:
+    if active_image.active_object.mask is None:
         masks, scores, logits = predictor.predict(
             point_coords=np.array(input_point),
             point_labels=np.array(input_label),
             multimask_output=True,
         )
-        
-        best_mask = masks[np.argmax(scores), :, :]
-        best_logit = logits[np.argmax(scores), :, :]
-        annotation_object = AnnotationObject(input_point, input_label, best_mask, best_logit, "001")
-        active_image.annotation_objects[annotation_object.label] = annotation_object
-        active_image.active_object = annotation_object
+
+        active_image.active_object.prompts.append([int(data['x']), int(data['y'])])
+        active_image.active_object.prompts_label.append(int(input_label[0]))
+        active_image.active_object.mask = masks[np.argmax(scores), :, :]
+        active_image.active_object.logit = logits[np.argmax(scores), :, :]
+
     else:
-        annotation_object = active_image.active_object
 
-        annotation_object.prompts.append([int(data['x']), int(data['y'])])
-        annotation_object.prompts_label.append(int(input_label[0]))
+        active_image.active_object.prompts.append([int(data['x']), int(data['y'])])
+        active_image.active_object.prompts_label.append(int(input_label[0]))
 
-        print(annotation_object.prompts)
-        print(annotation_object.prompts_label)
-        print(annotation_object.logit.shape)
         mask, score, logit = predictor.predict(
-            point_coords=np.array(annotation_object.prompts),
-            point_labels=np.array(annotation_object.prompts_label),
-            mask_input = annotation_object.logit[None, :, :],
+            point_coords=np.array(active_image.active_object.prompts),
+            point_labels=np.array(active_image.active_object.prompts_label),
+            mask_input = active_image.active_object.logit[None, :, :],
             multimask_output=False,
         )
 
-        annotation_object.mask = mask[0,:,:]
-        annotation_object.logit = logit[0,:,:]
-        active_image.active_object = annotation_object
+        active_image.active_object.mask = mask[0,:,:]
+        active_image.active_object.logit = logit[0,:,:]
 
     image = active_image.generate_visualization()
     return  -1, image
+
+def add_object(annotation_object_name_tb, image):
+    global dataset
+    global predictor
+
+    active_scene = dataset.active_scene
+
+    for anno_image in active_scene.annotation_images.values():
+
+        annotation_object = AnnotationObject([], [], None, None, annotation_object_name_tb)
+
+        anno_image.active_object = annotation_object
+        anno_image.annotation_objects[annotation_object.label] = annotation_object
+
+    for obj in active_scene.active_image.annotation_objects.values():
+        if obj.mask is not None:
+            image = active_scene.active_image.generate_visualization()
+
+    radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
+
+    radio_buttons = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", choices=radio_options, visible=True, interactive=True, value=radio_options[-1])
+
+    return  "", radio_buttons, image
+
+def change_annotation_object(annotation_objects_selection):
+    global dataset
+    global predictor
+
+    active_scene = dataset.active_scene
+
+    active_scene.active_image.active_object = active_scene.active_image.annotation_objects[annotation_objects_selection]
+
+    image = active_scene.active_image.generate_visualization()
+
+    return image
 
 def main(dataset_path):
     global dataset
@@ -172,11 +205,7 @@ def main(dataset_path):
 
         js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
         # #IDEA maybe hide until scene is selected 
-        with gr.Row():
-            with gr.Column(scale=5):
-                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
-            with gr.Column(scale=.6):
-                text = gr.Textbox(label="Click on Image to Annotate", elem_id="prompting_text", elem_classes="images", visible=True)
+
         with gr.Row():
             folder_selection = gr.Dropdown(
                 choices = dataset.get_scene_ids(),
@@ -187,9 +216,20 @@ def main(dataset_path):
                 label = "Select an Image",
                 visible=False,
             )
+
+        with gr.Row():
+            with gr.Column(scale=5):
+                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
+            with gr.Column(scale=1):
+                annotation_object_name_tb = gr.Textbox(label="Object you want to annotate", elem_id="prompting_text", elem_classes="images", visible=True)
+                add_annotation_object_btn = gr.Button("Add Object", elem_id="add_annotation_object", elem_classes="images", visible=True)
+                annotation_objects_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=True)
+
         folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image])
         img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
+        add_annotation_object_btn.click(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
+        annotation_objects_selection.change(change_annotation_object, [annotation_objects_selection], [prompting_image])
         js_parser.input(js_trigger, [js_parser, prompting_image], [js_parser, prompting_image])
     demo.queue()
     demo.launch()
