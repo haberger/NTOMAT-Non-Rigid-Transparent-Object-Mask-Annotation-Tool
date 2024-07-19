@@ -46,26 +46,43 @@ def load_scene(scene_id, prompting_image):
 
     prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True) 
 
-    yield f"Loading Scene {scene_id}:", None, gr.Dropdown(visible=False), prompting_image
+    yield f"Loading Scene {scene_id}:", None, gr.Dropdown(visible=False), prompting_image, None
     scene = dataset.annotation_scenes[scene_id]
     scene.load_images()
 
     #check if masks are present
     if not scene.has_correct_number_of_masks():
         gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-        yield f"Loading Scene {scene_id}: Generating missing masks", None, gr.Dropdown(visible=False), prompting_image
+        yield f"Loading Scene {scene_id}: Generating missing masks", None, gr.Dropdown(visible=False), prompting_image, None
         scene.generate_masks()
 
     rgb_imgs = scene.annotation_images.keys()
-
+    default_img = list(rgb_imgs)[0] 
     img_selection = gr.Dropdown(
-        value = list(rgb_imgs)[0], 
+        value = default_img, 
         choices = rgb_imgs,
         label = "Select an Image",
         visible=True
     )
     dataset.active_scene = scene
-    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image
+
+    scene.active_image = scene.annotation_images[default_img]
+
+    if scene.active_image.annotation_objects:
+        image = scene.active_image.generate_visualization()
+    else:
+        image = cv2.cvtColor(cv2.imread(scene.active_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+
+    predictor.set_image(image)
+
+    radio_options = [obj.label for obj in scene.active_image.annotation_objects.values()]
+    if len(radio_options) > 0:
+        default_value = radio_options[-1]
+    else:
+        default_value = None
+    annotation_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=False, choices=radio_options, value=default_value)
+
+    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image, annotation_selection
 
 
 def change_image(img_selection):
@@ -102,6 +119,7 @@ def click_image(image, evt: gr.SelectData):
 def js_trigger(input_data, image, annotation_objects_selection):
     global dataset
 
+    print(annotation_objects_selection)
     if annotation_objects_selection is None:
         gr.Warning("Please add an object to annotate first", duration=3)
         return -1, image
@@ -180,6 +198,8 @@ def change_annotation_object(annotation_objects_selection):
     global dataset
     global predictor
 
+    if annotation_objects_selection is None:
+        return None
     active_scene = dataset.active_scene
 
     active_scene.active_image.active_object = active_scene.active_image.annotation_objects[annotation_objects_selection]
@@ -229,7 +249,7 @@ def main(dataset_path):
                 add_annotation_object_btn = gr.Button("Add Object", elem_id="add_annotation_object", elem_classes="images", visible=True)
                 annotation_objects_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=True)
 
-        folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image])
+        folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image, annotation_objects_selection])
         img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
         add_annotation_object_btn.click(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
