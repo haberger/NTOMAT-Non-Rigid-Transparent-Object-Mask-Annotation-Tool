@@ -48,7 +48,7 @@ document.addEventListener('contextmenu', handleContextMenu, false);
 def load_scene(scene_id, prompting_image):
     global dataset
 
-    prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True) 
+    prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True, interactive=False) 
 
     yield f"Loading Scene {scene_id}:", None, gr.Dropdown(visible=False), prompting_image, None
     scene = dataset.annotation_scenes[scene_id]
@@ -258,7 +258,7 @@ def main(dataset_path):
 
         with gr.Row():
             with gr.Column(scale=5):
-                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False) 
+                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False, interactive=False) 
             with gr.Column(scale=1):
                 annotation_object_name_tb = gr.Textbox(label="Object you want to annotate", elem_id="prompting_text", elem_classes="images", visible=True)
                 add_annotation_object_btn = gr.Button("Add Object", elem_id="add_annotation_object", elem_classes="images", visible=True)
