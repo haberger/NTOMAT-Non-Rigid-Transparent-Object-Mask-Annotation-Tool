@@ -22,7 +22,11 @@ function getMousePosition(e, image) {
 }
 
 function handleMouseClick(e) {
-    if (e.target.tagName !== 'IMG') return;
+    const targetImage = e.target;
+    const offsetParentId = "prompting_image"; // ID of the target image's offsetParent div
+
+    if (targetImage.tagName !== 'IMG' || targetImage.offsetParent.id !== offsetParentId) return;
+
     var image = e.target;
     var { x, y } = getMousePosition(e, image);
 
@@ -176,21 +180,32 @@ def add_object(annotation_object_name_tb, image):
     global predictor
 
     active_scene = dataset.active_scene
-
-    for anno_image in active_scene.annotation_images.values():
-
-        annotation_object = AnnotationObject([], [], None, None, annotation_object_name_tb)
-
-        anno_image.active_object = annotation_object
-        anno_image.annotation_objects[annotation_object.label] = annotation_object
-
-    for obj in active_scene.active_image.annotation_objects.values():
-        if obj.mask is not None:
-            image = active_scene.active_image.generate_visualization()
-
     radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
 
-    radio_buttons = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", choices=radio_options, visible=True, interactive=True, value=radio_options[-1])
+    if annotation_object_name_tb in [None, ""]:
+        gr.Warning("Please enter a name for the object", duration=3)
+    elif annotation_object_name_tb in radio_options:
+        gr.Warning("Object with that name already exists", duration=3)
+    else:
+        
+        for anno_image in active_scene.annotation_images.values():
+
+            annotation_object = AnnotationObject([], [], None, None, annotation_object_name_tb)
+
+            anno_image.active_object = annotation_object
+            anno_image.annotation_objects[annotation_object.label] = annotation_object
+
+        for obj in active_scene.active_image.annotation_objects.values():
+            if obj.mask is not None:
+                image = active_scene.active_image.generate_visualization()
+        radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
+        
+    if len(radio_options) > 0:
+        default_value = radio_options[-1]
+    else:
+        default_value = None
+
+    radio_buttons = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", choices=radio_options, visible=True, interactive=True, value=default_value)
 
     return  "", radio_buttons, image
 
@@ -253,6 +268,7 @@ def main(dataset_path):
         img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
         add_annotation_object_btn.click(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
+        annotation_object_name_tb.submit(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
         annotation_objects_selection.change(change_annotation_object, [annotation_objects_selection], [prompting_image])
         js_parser.input(js_trigger, [js_parser, prompting_image, annotation_objects_selection], [js_parser, prompting_image])
     demo.queue()
