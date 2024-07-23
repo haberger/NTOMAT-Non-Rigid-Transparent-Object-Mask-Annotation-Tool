@@ -51,7 +51,7 @@ class AnnotationImage:
             if prompt_obj == self.active_object:
                 color = (0, 0, 255)
 
-            contours, _ = cv2.findContours(prompt_obj.mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(prompt_obj.mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(overlay, contours, -1, color, 2)
 
         for (x, y), label in zip(self.active_object.prompts, self.active_object.prompts_label):
