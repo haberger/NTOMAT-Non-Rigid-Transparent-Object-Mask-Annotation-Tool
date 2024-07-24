@@ -233,7 +233,7 @@ def instanciate_voxel_grid():
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
     active_scene.instanciate_voxel_grid_at_poi()
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
-    image = active_scene.get_voxel_grid_top_down_view()
+    image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     #save image 
     cv2.imwrite("test.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     yield button, "Voxel Grid Instanciated", image
@@ -249,7 +249,7 @@ def accept_annotation(voxel_image, keep_voxels_outside_image):
     active_image.annotation_accepted = True
     if active_scene.voxel_grid is not None:
         active_scene.carve_silhouette(active_image, keep_voxels_outside_image=keep_voxels_outside_image)
-        voxel_image = active_scene.get_voxel_grid_top_down_view()
+        voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     return voxel_image
 
 
@@ -259,7 +259,14 @@ def show_voxel_grid():
 
     active_scene = dataset.active_scene
     if active_scene.voxel_grid is not None:
-        o3d.visualization.draw_geometries([active_scene.voxel_grid])
+        o3d.visualization.draw_geometries([active_scene.voxel_grid.o3d_grid])
+
+def manual_annotation_done():
+    global dataset
+    global predictor
+
+    active_scene = dataset.active_scene
+    active_scene.voxel_grid.convert_voxel_grid_to_mesh()
 
 
 def main(dataset_path):
@@ -310,6 +317,7 @@ def main(dataset_path):
                         accept_annotation_btn = gr.Button("Accept, not all objects in view\n")
                 voxel_image = gr.Image(label="Voxel Grid", elem_id="voxel_image", elem_classes="images", visible=True, interactive=False)
                 show_grid_btn = gr.Button("Show Voxel Grid", elem_id="show_grid", elem_classes="images", visible=True)
+                manual_annotation_done_btn = gr.Button("Manual Annotation Done", elem_id="manual_annotation_done", elem_classes="images", visible=True)
         folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image])
         img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
         prompting_image.select(click_image, [prompting_image])
@@ -320,6 +328,8 @@ def main(dataset_path):
         seen_all_objects_btn.click(instanciate_voxel_grid ,outputs=[seen_all_objects_btn, status_md, voxel_image])
         accept_annotation_btn.click(accept_annotation, [voxel_image, gr.State(True)], [voxel_image])
         accept_annotation_all_in_view_btn.click(accept_annotation, [voxel_image, gr.State(False)], [voxel_image])
+        manual_annotation_done_btn.click(manual_annotation_done)
+
         show_grid_btn.click(show_voxel_grid)
     demo.queue()
     demo.launch()

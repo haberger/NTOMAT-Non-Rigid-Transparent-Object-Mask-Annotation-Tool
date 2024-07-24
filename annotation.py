@@ -6,6 +6,7 @@ from pathlib import Path
 from copy import deepcopy
 import utils.vis_masks as vis_masks
 import open3d as o3d
+import mcubes
 
 @dataclass
 class AnnotationObject:
@@ -131,9 +132,9 @@ class AnnotationScene:
                 return False
             return True
         
-    def max_distance_camera_reorder(self, poses, k=None):
-        if k is None:
-            k = int(len(poses)/2)
+    def max_distance_camera_reorder(self, poses, k=7):
+        # if k is None:
+        #     k = int(len(poses)/2)
         points = np.array([pose.translation() for pose in poses])
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
@@ -164,14 +165,15 @@ class AnnotationScene:
         width = max_distance * 1.5
         height = max_distance * 1.5
         depth = max_distance * 1.5
+        print(width, height, depth)
 
-        self.voxel_grid = o3d.geometry.VoxelGrid.create_dense(
+        self.voxel_grid = VoxelGrid(
             width=width,
             height=height,
             depth=depth,
             voxel_size=voxel_size,
-            origin=[self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2],
-            color=[0.2, 0.2, 0.2]
+            origin=np.array([self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2]).astype(np.float64),
+            color=np.array([0.2, 0.2, 0.2]).astype(np.float64)
         )
 
         #visualize voxel grid
@@ -194,7 +196,7 @@ class AnnotationScene:
         relevant_points = []
         for pose in camera_poses:
             pose = pose.tf
-            mask_grid = deepcopy(self.voxel_grid)
+            mask_grid = deepcopy(self.voxel_grid.o3d_grid)
             mask = np.ones((self.img_height, self.img_width))
             silhouette = o3d.geometry.Image(mask.astype(np.float32))
             extrinsic = np.linalg.inv(pose)
@@ -207,15 +209,15 @@ class AnnotationScene:
             relevant_points += [voxel.grid_index for voxel in mask_grid.get_voxels()]
             print(mask_grid)
 
-        for voxel in self.voxel_grid.get_voxels():
-            self.voxel_grid.remove_voxel(voxel.grid_index)
+        for voxel in self.voxel_grid.o3d_grid.get_voxels(): #TODO why not use clear()?
+            self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
         for pos in relevant_points:
             new_voxel = o3d.geometry.Voxel(pos, [0, 0, 1])
-            self.voxel_grid.add_voxel(new_voxel)
+            self.voxel_grid.o3d_grid.add_voxel(new_voxel)
 
         for pose in camera_poses:
             pose = pose.tf
-            mask_grid = deepcopy(self.voxel_grid)
+            mask_grid = deepcopy(self.voxel_grid.o3d_grid)
             mask = np.zeros((self.img_height, self.img_width))
             silhouette = o3d.geometry.Image(mask.astype(np.float32))
             extrinsic = np.linalg.inv(pose)
@@ -227,41 +229,10 @@ class AnnotationScene:
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
 
         for voxel in mask_grid.get_voxels():
-            self.voxel_grid.remove_voxel(voxel.grid_index)
+            self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
 
         for image in images:
             self.carve_silhouette(image, keep_voxels_outside_image=True)
-
-    def get_voxel_grid_top_down_view(self):
-        if self.voxel_grid is None:
-            return None
-        
-        renderer = o3d.visualization.rendering.OffscreenRenderer(self.img_width, self.img_height)
-
-        mtl = o3d.visualization.rendering.MaterialRecord()
-        mtl.base_color = [0.5, 0.5, 0.5, 1.0]  # RGBA, does not replace the mesh color
-        mtl.shader = "defaultUnlit"
-
-        renderer.scene.add_geometry("grid", self.voxel_grid, mtl)
-
-        intrinsics = o3d.camera.PinholeCameraIntrinsic(self.img_width, self.img_height, self.camera_intrinsics[0, 0], self.camera_intrinsics[1, 1], self.camera_intrinsics[0, 2], self.camera_intrinsics[1, 2])
-        #extrensics: translation 2 meters above self.poi in z. Looking down
-        
-        pose = np.array([
-            [1, 0, 0, self.poi[0]],
-            [0, 1, 0, self.poi[1]],
-            [0, 0, 1, self.poi[2]-1],
-            [0, 0, 0, 1]
-        ])
-
-        extrinsics = np.linalg.inv(pose)
-
-        # extrinsics = np.eye(4)
-        # extrinsics[:3, 3] = [-self.poi[0], -self.poi[1], -self.poi[2]+2]
-
-        renderer.setup_camera(intrinsics, extrinsics)
-        img = np.asarray(renderer.render_to_image())
-        return img
 
     def get_cameras_point_of_interest(self, debug_vizualization=False):
         '''adepted from https://math.stackexchange.com/questions/4865611/intersection-closest-point-of-multiple-rays-in-3d-space'''
@@ -295,6 +266,8 @@ class AnnotationScene:
     def carve_silhouette(self, image, keep_voxels_outside_image):
         mask = image.silhouette.astype(np.uint8)
         for obj in image.annotation_objects.values():
+            if obj.mask is None:
+                continue
             mask += obj.mask.astype(np.uint8)
         mask[mask > 0] = 1
 
@@ -306,7 +279,7 @@ class AnnotationScene:
         cam.intrinsic = intrinsic
         cam.extrinsic = extrinsic
 
-        self.voxel_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=keep_voxels_outside_image)
+        self.voxel_grid.o3d_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=keep_voxels_outside_image)
         
     def visualize_rays_and_intersection(self, ois, vis, intersection_point):
         geometries = []
@@ -328,6 +301,103 @@ class AnnotationScene:
         geometries.append(sphere)
         
         o3d.visualization.draw_geometries(geometries)
+
+    def get_random_color(self):
+        return list(np.random.choice(range(256), size=3) / 255.0)
+
+class VoxelGrid:
+    def __init__(self, width, height, depth, voxel_size, origin, color):
+        self.width = width
+        self.height = height
+        self.depth = depth
+        self.voxel_size = voxel_size
+        self.origin = origin
+        self.color = color
+        self.o3d_grid = o3d.geometry.VoxelGrid.create_dense(
+            origin=self.origin,
+            color=self.color,
+            voxel_size=self.voxel_size,
+            width=self.width,
+            height=self.height,
+            depth=self.depth
+        )
+
+    def get_voxel_grid_top_down_view(self, z=1):
+        poi = [self.origin[0] + self.width/2, self.origin[1] + self.height/2, self.origin[2] + self.depth/2]
+        renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
+
+        mtl = o3d.visualization.rendering.MaterialRecord()
+        mtl.base_color = [0.5, 0.5, 0.5, 1.0]  # RGBA, does not replace the mesh color
+        mtl.shader = "defaultUnlit"
+
+        renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
+
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(500, 500, 250, 250, 250, 250)
+        #extrensics: translation 2 meters above self.poi in z. Looking down
+        
+        pose = np.array([
+            [1, 0, 0, poi[0]],
+            [0, 1, 0, poi[1]],
+            [0, 0, 1, poi[2]-z],
+            [0, 0, 0, 1]
+        ])
+
+        extrinsics = np.linalg.inv(pose)
+
+        renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(renderer.render_to_image())
+        return img
+
+    def visualize_colored_meshes(self, meshes):
+        def get_random_color():
+            return list(np.random.choice(range(256), size=3) / 255.0)
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
+
+        for mesh in meshes:
+            color = get_random_color()
+            mesh.paint_uniform_color(color)  
+            
+            vis.add_geometry(mesh)
+
+        vis.run()
+        vis.destroy_window()
+
+    def convert_voxel_grid_to_mesh(self):
+
+        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)))
+        for voxel in self.o3d_grid.get_voxels():
+            voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 1
+        
+        vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        mesh.triangles = o3d.utility.Vector3iVector(triangles)
+        o3d.visualization.draw_geometries([mesh])
+
+        triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
+        triangle_clusters = np.asarray(triangle_clusters)
+        cluster_n_triangles = np.asarray(cluster_n_triangles)
+
+        # Get unique cluster labels and corresponding triangle counts
+        unique_labels = np.unique(triangle_clusters)
+        print(unique_labels)
+
+        # Create separate meshes for each cluster
+        separate_meshes = []
+        for label in unique_labels:
+            # Filter triangles belonging to the current cluster
+            cluster_triangles = np.where(triangle_clusters == label)[0]
+            if len(cluster_triangles) < 100:
+                continue
+            mesh_cluster = o3d.geometry.TriangleMesh(
+                vertices=mesh.vertices,
+                triangles=o3d.utility.Vector3iVector(
+                    np.asarray(mesh.triangles)[cluster_triangles]
+                ),
+            )
+            separate_meshes.append(mesh_cluster)
+        self.visualize_colored_meshes(separate_meshes)
 
 class AnnotationDataset:
     def __init__(self, dataset_path, config="config.cfg"):
