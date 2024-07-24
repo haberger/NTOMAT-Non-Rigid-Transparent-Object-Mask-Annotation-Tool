@@ -3,6 +3,7 @@ from utils.v4r import SceneFileReader
 import numpy as np
 import cv2
 from pathlib import Path
+from copy import deepcopy
 import utils.vis_masks as vis_masks
 import open3d as o3d
 
@@ -13,14 +14,14 @@ class AnnotationObject:
     mask: np.ndarray
     logit: np.ndarray
     label: str
-
 class AnnotationImage:
-    def __init__(self, rgb_path, camera_extrinsics, loaded_mask=None):
+    def __init__(self, rgb_path, camera_pose, silhouette=None):
         self.rgb_path = rgb_path
-        self.camera_extrinsics = camera_extrinsics
+        self.camera_pose = camera_pose
         self.annotation_objects = {}
-        self.loaded_mask = None
+        self.silhouette = silhouette
         self.active_object = None
+        self.annotation_accepted = False
 
     def generate_visualization(self):
         image = cv2.imread(self.rgb_path)
@@ -59,7 +60,6 @@ class AnnotationImage:
             cv2.rectangle(overlay, (x-2, y-2), (x+2, y+2), dot_color, -1)
 
         return overlay
-
 class AnnotationScene:
     def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
         self.scene_id = scene_id
@@ -70,23 +70,50 @@ class AnnotationScene:
         self.camera_intrinsics = camera_intrinsics
         self.img_width = img_width
         self.img_height = img_height
+        self.poi = self.get_cameras_point_of_interest()
 
     def load_images(self):
         image_paths = self.scene_reader.get_images_rgb_path(self.scene_id)
         camera_poses = self.scene_reader.get_camera_poses(self.scene_id)
+        rigit_silhouette = self.get_rigit_silhouette()
 
         #perform smart camera pose ordering
         reordering = self.max_distance_camera_reorder(camera_poses)
-        camera_poses = [camera_poses[i] for i in reordering]
-        image_paths = [image_paths[i] for i in reordering]
-
-        for i, image_path in enumerate(image_paths):
-            image_path = Path(image_path)
-            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i])
+        # camera_poses = [camera_poses[i] for i in reordering]
+        # image_paths = [image_paths[i] for i in reordering]
+        # rigit_silhouette = rigit_silhouette[reordering]
+        # for i, image_path in enumerate(image_paths):
+        #     image_path = Path(image_path)
+        #     self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_silhouette[i])
+        for i in reordering:
+            image_path = Path(image_paths[i])
+            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_silhouette[i])
     
+    def get_rigit_silhouette(self):
+        # read in all scene masks
+
+        # mask count
+        mask_path = Path(self.scene_reader.get_images_mask_path(self.scene_id))
+
+        pose_count = len(self.scene_reader.get_camera_poses(self.scene_id))
+        object_count = len(self.scene_reader.get_object_poses(self.scene_id))
+        width = self.scene_reader.get_camera_info_scene(self.scene_id).width
+        height = self.scene_reader.get_camera_info_scene(self.scene_id).height
+        mask_count = pose_count * object_count
+        masks = np.zeros((mask_count, height, width), dtype=np.uint8)
+        i = 0
+        for mask_file in sorted(mask_path.iterdir()):
+            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+            masks[i] = mask
+            i += 1
+
+        masks_reshaped = masks.reshape(object_count, pose_count, height, width)
+        rigid_silhouettes = np.sum(masks_reshaped, axis=0).astype(np.uint8)
+        rigid_silhouettes[rigid_silhouettes > 0] = 255
+        return rigid_silhouettes   
+
     def generate_masks(self):
         vis_masks.create_masks(self.scene_reader, self.scene_id)
-
 
     def get_images(self):
         return self.annotationImages.keys()
@@ -104,14 +131,16 @@ class AnnotationScene:
                 return False
             return True
         
-    def max_distance_camera_reorder(self, poses, k=5):
+    def max_distance_camera_reorder(self, poses, k=None):
+        if k is None:
+            k = int(len(poses)/2)
         points = np.array([pose.translation() for pose in poses])
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
 
         downsampled_points = np.asarray(pcd.farthest_point_down_sample(k).points)
         #sort the downsampled list by z value decreasing
-        downsampled_points = downsampled_points[np.argsort(downsampled_points[:, 2])[::-1]]
+        # downsampled_points = downsampled_points[np.argsort(downsampled_points[:, 2])[::-1]]
 
         # return reordering of original list so that the downsampled_points are first
         
@@ -119,6 +148,186 @@ class AnnotationScene:
         indices = [np.where(points == pose)[0][0] for pose in downsampled_points]
         full_odering = indices + [i for i in range(len(points)) if i not in indices]
         return full_odering
+    
+    def instanciate_voxel_grid_at_poi(self, voxel_size=0.005):
+
+        #TODO maybe add warning if obejcts are further away from the poi than 0.5m
+
+        camera_poses = [image.camera_pose for image in self.annotation_images.values()]
+
+        # get largest distance between cameras and ray intersection
+        distances = []
+        for camera_pose in camera_poses:
+            distances.append(np.linalg.norm(self.poi - camera_pose.tf[:3, 3]))
+        max_distance = np.max(distances)
+
+        width = max_distance * 1.5
+        height = max_distance * 1.5
+        depth = max_distance * 1.5
+
+        self.voxel_grid = o3d.geometry.VoxelGrid.create_dense(
+            width=width,
+            height=height,
+            depth=depth,
+            voxel_size=voxel_size,
+            origin=[self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2],
+            color=[0.2, 0.2, 0.2]
+        )
+
+        #visualize voxel grid
+        # o3d.visualization.draw_geometries([self.voxel_grid])
+
+        print("prefiltering")
+
+        camera_intrinsics = o3d.camera.PinholeCameraIntrinsic(
+            self.img_width,
+            self.img_height,
+            self.camera_intrinsics[0, 0], 
+            self.camera_intrinsics[1, 1], 
+            self.camera_intrinsics[0, 2], 
+            self.camera_intrinsics[1, 2])
+
+        #get all camera poses of images that have accepted annotations
+        images = [image for image in self.annotation_images.values() if image.annotation_accepted]
+        camera_poses = [image.camera_pose for image in images]
+
+        relevant_points = []
+        for pose in camera_poses:
+            pose = pose.tf
+            mask_grid = deepcopy(self.voxel_grid)
+            mask = np.ones((self.img_height, self.img_width))
+            silhouette = o3d.geometry.Image(mask.astype(np.float32))
+            extrinsic = np.linalg.inv(pose)
+            intrinsic = camera_intrinsics
+            
+            cam = o3d.camera.PinholeCameraParameters()
+            cam.intrinsic = intrinsic
+            cam.extrinsic = extrinsic
+            mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=False)
+            relevant_points += [voxel.grid_index for voxel in mask_grid.get_voxels()]
+            print(mask_grid)
+
+        for voxel in self.voxel_grid.get_voxels():
+            self.voxel_grid.remove_voxel(voxel.grid_index)
+        for pos in relevant_points:
+            new_voxel = o3d.geometry.Voxel(pos, [0, 0, 1])
+            self.voxel_grid.add_voxel(new_voxel)
+
+        for pose in camera_poses:
+            pose = pose.tf
+            mask_grid = deepcopy(self.voxel_grid)
+            mask = np.zeros((self.img_height, self.img_width))
+            silhouette = o3d.geometry.Image(mask.astype(np.float32))
+            extrinsic = np.linalg.inv(pose)
+            intrinsic = camera_intrinsics
+            
+            cam = o3d.camera.PinholeCameraParameters()
+            cam.intrinsic = intrinsic
+            cam.extrinsic = extrinsic
+            mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
+
+        for voxel in mask_grid.get_voxels():
+            self.voxel_grid.remove_voxel(voxel.grid_index)
+
+        for image in images:
+            self.carve_silhouette(image, keep_voxels_outside_image=True)
+
+    def get_voxel_grid_top_down_view(self):
+        if self.voxel_grid is None:
+            return None
+        
+        renderer = o3d.visualization.rendering.OffscreenRenderer(self.img_width, self.img_height)
+
+        mtl = o3d.visualization.rendering.MaterialRecord()
+        mtl.base_color = [0.5, 0.5, 0.5, 1.0]  # RGBA, does not replace the mesh color
+        mtl.shader = "defaultUnlit"
+
+        renderer.scene.add_geometry("grid", self.voxel_grid, mtl)
+
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(self.img_width, self.img_height, self.camera_intrinsics[0, 0], self.camera_intrinsics[1, 1], self.camera_intrinsics[0, 2], self.camera_intrinsics[1, 2])
+        #extrensics: translation 2 meters above self.poi in z. Looking down
+        
+        pose = np.array([
+            [1, 0, 0, self.poi[0]],
+            [0, 1, 0, self.poi[1]],
+            [0, 0, 1, self.poi[2]-1],
+            [0, 0, 0, 1]
+        ])
+
+        extrinsics = np.linalg.inv(pose)
+
+        # extrinsics = np.eye(4)
+        # extrinsics[:3, 3] = [-self.poi[0], -self.poi[1], -self.poi[2]+2]
+
+        renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(renderer.render_to_image())
+        return img
+
+    def get_cameras_point_of_interest(self, debug_vizualization=False):
+        '''adepted from https://math.stackexchange.com/questions/4865611/intersection-closest-point-of-multiple-rays-in-3d-space'''
+
+        camera_poses = self.scene_reader.get_camera_poses(self.scene_id)
+
+        vis = [pose.tf[:3, 2] for pose in camera_poses]
+        ois = [pose.tf[:3, 3] for pose in camera_poses]
+
+        q = np.zeros((3, 3))
+        b = np.zeros(3)
+        c = 0
+        for oi, vi in zip(ois, vis):
+            p0 = np.eye(3) - np.outer(vi, vi)
+            q += p0
+            poi = np.dot(p0, oi) * -2
+            b += poi
+            c += np.dot(oi, oi)
+
+        try:
+            qinv = np.linalg.inv(q)
+        except np.linalg.LinAlgError:
+            print("Matrix not invertible")
+            return None
+
+        x1 = np.dot(qinv, b) * -0.5
+        if debug_vizualization:
+            self.visualize_rays_and_intersection(ois, vis, x1)
+        return x1
+    
+    def carve_silhouette(self, image, keep_voxels_outside_image):
+        mask = image.silhouette.astype(np.uint8)
+        for obj in image.annotation_objects.values():
+            mask += obj.mask.astype(np.uint8)
+        mask[mask > 0] = 1
+
+        extrinsic = np.linalg.inv(image.camera_pose.tf)
+        silhouette = o3d.geometry.Image(mask.astype(np.float32))
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(self.img_width, self.img_height, self.camera_intrinsics[0, 0], self.camera_intrinsics[1, 1], self.camera_intrinsics[0, 2], self.camera_intrinsics[1, 2])
+
+        cam = o3d.camera.PinholeCameraParameters()
+        cam.intrinsic = intrinsic
+        cam.extrinsic = extrinsic
+
+        self.voxel_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=keep_voxels_outside_image)
+        
+    def visualize_rays_and_intersection(self, ois, vis, intersection_point):
+        geometries = []
+
+        # Visualize rays
+        for oi, vi in zip(ois, vis):
+            line_points = [oi, oi + vi * 10]  # Extend the direction vector for visualization
+            line = o3d.geometry.LineSet(
+                points=o3d.utility.Vector3dVector(line_points),
+                lines=o3d.utility.Vector2iVector([[0, 1]])
+            )
+            line.colors = o3d.utility.Vector3dVector([[1, 0, 0]])  # Red color
+            geometries.append(line)
+        
+        # Visualize intersection point
+        sphere = o3d.geometry.TriangleMesh.create_sphere(radius=0.1)
+        sphere.paint_uniform_color([0, 1, 0])  # Green color
+        sphere.translate(intersection_point)
+        geometries.append(sphere)
+        
+        o3d.visualization.draw_geometries(geometries)
 
 class AnnotationDataset:
     def __init__(self, dataset_path, config="config.cfg"):
