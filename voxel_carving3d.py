@@ -98,6 +98,28 @@ def visualize_colored_meshes(meshes):
     vis.run()
     vis.destroy_window()
 
+def split_triangles(mesh):
+    """
+    Split the mesh in independent triangles    
+    """
+    triangles = np.asarray(mesh.triangles).copy()
+    vertices = np.asarray(mesh.vertices).copy()
+
+    triangles_3 = np.zeros_like(triangles)
+    vertices_3 = np.zeros((len(triangles) * 3, 3), dtype=vertices.dtype)
+
+    for index_triangle, t in enumerate(triangles):
+        index_vertex = index_triangle * 3
+        vertices_3[index_vertex] = vertices[t[0]]
+        vertices_3[index_vertex + 1] = vertices[t[1]]
+        vertices_3[index_vertex + 2] = vertices[t[2]]
+
+        triangles_3[index_triangle] = np.arange(index_vertex, index_vertex + 3)
+
+    mesh_return = deepcopy(mesh)
+    mesh_return.triangles = o3d.utility.Vector3iVector(triangles_3)
+    mesh_return.vertices = o3d.utility.Vector3dVector(vertices_3)
+    return mesh_return
 
 def voxel_carving_test(scene, scene_id):
     silhouettes = get_rigit_silhouette(scene)
@@ -171,93 +193,66 @@ def voxel_carving_test(scene, scene_id):
     vertex_colors = np.zeros((len(vertices), 3))
     print(vertex_colors.shape)
     for i, vertice in enumerate(vertices):
-        vertex_colors[i] = np.array(vertice/max_index)
+        vertex_colors[i] = np.array(vertice/max_index) #TODO we could do boubnding box -> min max scale to one -> keep scaling factor -> rescale -> better quality
     mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
     o3d.visualization.draw_geometries([mesh, voxel_carving_grid])
-
-    # renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
-
-    # mtl = o3d.visualization.rendering.MaterialRecord()
-    # mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
-    # mtl.shader = "defaultUnlit"
-
-    # renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
-
-    # intrinsics = o3d.camera.PinholeCameraIntrinsic(500, 500, 250, 250, 250, 250)
-    # #extrensics: translation 2 meters above self.poi in z. Looking down
-    
-    # pose = np.array([
-    #     [1, 0, 0, poi[0]],
-    #     [0, 1, 0, poi[1]],
-    #     [0, 0, 1, poi[2]-z],
-    #     [0, 0, 0, 1]
-    # ])
-
-    # extrinsics = np.linalg.inv(pose)
-
-    # renderer.setup_camera(intrinsics, extrinsics)
-    # img = np.asarray(renderer.render_to_image())
 
     img_width = scene.get_camera_info_scene(scene_id).width
     img_height = scene.get_camera_info_scene(scene_id).height
     intrinsics = scene.get_camera_info_scene(scene_id).as_o3d()
     extrinsics = np.linalg.inv(camera_poses[0].tf)
 
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
-    vis.add_geometry(mesh)
-    view_control = vis.get_view_control()
-    camera_parameters = o3d.camera.PinholeCameraParameters()
+    renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
+    renderer.scene.set_background([0, 0, 0, 1])
+    renderer.scene.view.set_post_processing(False)
+    renderer.scene.set_lighting(o3d.visualization.rendering.Open3DScene.LightingProfile.NO_SHADOWS, [0,0,0])
 
-    render_option = vis.get_render_option()
-
-    # Disable lighting and shading
-    render_option.light_on = False  
-    render_option.mesh_show_back_face = True
-    # render_option.mesh_shade_option = o3d.visualization.MeshShadeOption.FlatColor
-
-    # Assign intrinsics and extrinsics
-    camera_parameters.intrinsic = intrinsics
-    camera_parameters.extrinsic = extrinsics
-    view_control.convert_from_pinhole_camera_parameters(camera_parameters, True)
-    vis.run()
-    image = vis.capture_screen_float_buffer(False)  
-    image_float = np.asarray(image)   
-    vis.destroy_window()
-    image = np.asarray(image)
-    print(image.dtype)
-
-
-
-
-
-    for y in range(img_height):
-        for x in range(img_width):
-            color = image[y, x]
-            # if white continue
-            if color[0] == 1.0 and color[1] == 1.0 and color[2] == 1.0:
-                continue
-            for vertex_color in vertex_colors:
-                if sum(np.abs(vertex_color-color)) < 0.001:
-                    print(vertex_color, color)
-                
-
-
-    # renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
-
-    # mtl = o3d.visualization.rendering.MaterialRecord()
+    mtl = o3d.visualization.rendering.MaterialRecord()
     # mtl.base_color = [1.0, 1.0, 1.0, 1.0]
-    # mtl.shader = "defaultUnlit"
+    mtl.shader = "defaultUnlit"
+    o3d.visualization.draw_geometries([mesh])
 
-    # renderer.scene.add_geometry("mesh", mesh, mtl)
+    renderer.scene.add_geometry("mesh", mesh, mtl, True)
 
-    # renderer.setup_camera(intrinsics, extrinsics)
-    # img = renderer.render_to_image()
-    # print(img)
-    # print(img.dtype)
-    image = np.asarray(image*255).astype(np.uint8)
-    cv2.imwrite("voxel_carving.png", image)
+    renderer.setup_camera(intrinsics, extrinsics)
+    img = renderer.render_to_image()
+    img = np.array(img)
 
+    # img/255*biggest_index -> position in voxel grid
+
+    cv2.imwrite("voxel_carving.png", img)
+
+    id_mesh = deepcopy(mesh)
+
+    masks = []
+    masks_dir = Path(scene.root_dir) / scene.scenes_dir / scene_id / scene.mask_dir
+    print(masks_dir)
+    # object LargerinseFluidA_Bottle.stl
+    for mask_file in sorted(masks_dir.iterdir()):
+        print(mask_file.name.split("_")[0])
+        if mask_file.name.split("_")[0] == "LargeRinseFluidA":
+            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+            masks.append(mask)
+            print('hi')
+
+    #go through rendered image
+    # -> look up id in reference masks
+    # -> delete voxel closest to position caclulated from rendered image color
+    # -> insert voxel with color of object
+    # -> repeat for all pixels of image
+    # -> repeat for all fully annotated images
+    
+    # -> Object Names
+    # -> Object IDs
+    # -> Segmentation_mask (silhouette but with object id instead of 1)
+
+    # -> In the beginning of gradio load all object names and ids -> toogle button that overlays segmentation mask over scene
+    # -> Ask user what objects to add
+
+    # -> potential todo auto detect if all non rigid objects are fully in camera frustum -> check if all masks are non bleck and border pixels are non black
+    # -> all already annotated objects are in view. -> if not -> dont allow to remove voxels outside of camera frostrum
+
+    # -> potential todo -> dont encode grid position in color but encode the actual position in the world -> less wasted indices -> higher resolution -> map to grid index afterwards
 
 def test_voxelgrid_filtering(scene, scene_id):
     silhouettes = get_rigit_silhouette(scene)
@@ -357,7 +352,7 @@ def test_voxelgrid_filtering(scene, scene_id):
 
 if __name__ == "__main__":
 
-    DATASET_PATH = Path('../depth-estimation-of-transparent-objects')
+    DATASET_PATH = Path('../Dataset')
     scene_id = 'j_005'
     scene = SceneFileReader.create(DATASET_PATH / 'config.cfg')
     voxel_carving_test(scene, scene_id)

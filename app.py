@@ -340,7 +340,7 @@ if __name__ == "__main__":
     parser.add_argument(  
         '-d',
         dest='dataset_path',
-        default = '../depth-estimation-of-transparent-objects',
+        default = '../Dataset',
         help='path_to_3D-DAT Dataset')
 
     args = parser.parse_args()
