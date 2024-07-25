@@ -327,7 +327,7 @@ class VoxelGrid:
         renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
 
         mtl = o3d.visualization.rendering.MaterialRecord()
-        mtl.base_color = [0.5, 0.5, 0.5, 1.0]  # RGBA, does not replace the mesh color
+        mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
         mtl.shader = "defaultUnlit"
 
         renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
@@ -359,21 +359,25 @@ class VoxelGrid:
             mesh.paint_uniform_color(color)  
             
             vis.add_geometry(mesh)
-
+        vis.add_geometry(self.o3d_grid)
         vis.run()
         vis.destroy_window()
 
     def convert_voxel_grid_to_mesh(self):
 
         voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)))
+        print(voxel_grid.shape)
         for voxel in self.o3d_grid.get_voxels():
-            voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 1
+            voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 15
         
         vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
+        print(len(vertices), len(triangles))
+        print(vertices[0], triangles[0])
         mesh = o3d.geometry.TriangleMesh()
         mesh.vertices = o3d.utility.Vector3dVector(vertices)
         mesh.triangles = o3d.utility.Vector3iVector(triangles)
         o3d.visualization.draw_geometries([mesh])
+        print(f"mesh center: mesh.get_center()")
 
         triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
         triangle_clusters = np.asarray(triangle_clusters)

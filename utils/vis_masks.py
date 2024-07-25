@@ -135,7 +135,7 @@ def put_text(text, img, x, y, color):
 
 
 def create_masks(scene_file_reader, scene_id, output=None):
-
+    
     if output is None:
         output = os.path.join(
             scene_file_reader.root_dir,
