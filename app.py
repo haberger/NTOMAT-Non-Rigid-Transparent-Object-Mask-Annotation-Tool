@@ -231,7 +231,7 @@ def instanciate_voxel_grid():
     active_scene = dataset.active_scene
     button = gr.Button("Seen All Objects", elem_id="seen_all_objects", elem_classes="images", visible=False)
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
-    active_scene.instanciate_voxel_grid_at_poi()
+    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.01)
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
     image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     #save image 
@@ -266,7 +266,7 @@ def manual_annotation_done():
     global predictor
 
     active_scene = dataset.active_scene
-    active_scene.voxel_grid.convert_voxel_grid_to_mesh()
+    active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
 
 
 def main(dataset_path):

@@ -16,11 +16,11 @@ class AnnotationObject:
     logit: np.ndarray
     label: str
 class AnnotationImage:
-    def __init__(self, rgb_path, camera_pose, silhouette=None):
+    def __init__(self, rgb_path, camera_pose, rigid_segmap=None):
         self.rgb_path = rgb_path
         self.camera_pose = camera_pose
         self.annotation_objects = {}
-        self.silhouette = silhouette
+        self.segmap= rigid_segmap
         self.active_object = None
         self.annotation_accepted = False
 
@@ -72,11 +72,25 @@ class AnnotationScene:
         self.img_width = img_width
         self.img_height = img_height
         self.poi = self.get_cameras_point_of_interest()
+        self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
+        # -> list object names in the beginning. let annotater add to the list object name and count 
+
+    def get_object_metadata(self):
+        objects_data = self.scene_reader.get_object_poses(self.scene_id)
+        object_list = [inner_list[0] for inner_list in objects_data]
+        dataset_object_ids = []
+        names = []
+        scene_object_ids = []
+        for i in range(len(object_list)):
+            dataset_object_ids.append(object_list[i].id)
+            names.append(object_list[i].name)
+            scene_object_ids.append(i+1)
+        return dataset_object_ids, names, scene_object_ids
 
     def load_images(self):
         image_paths = self.scene_reader.get_images_rgb_path(self.scene_id)
         camera_poses = self.scene_reader.get_camera_poses(self.scene_id)
-        rigit_silhouette = self.get_rigit_silhouette()
+        rigit_segmaps = self.get_rigit_segmaps()
 
         #perform smart camera pose ordering
         reordering = self.max_distance_camera_reorder(camera_poses)
@@ -88,9 +102,9 @@ class AnnotationScene:
         #     self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_silhouette[i])
         for i in reordering:
             image_path = Path(image_paths[i])
-            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_silhouette[i])
+            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_segmaps[i])
     
-    def get_rigit_silhouette(self):
+    def get_rigit_segmaps(self):
         # read in all scene masks
 
         # mask count
@@ -102,16 +116,16 @@ class AnnotationScene:
         height = self.scene_reader.get_camera_info_scene(self.scene_id).height
         mask_count = pose_count * object_count
         masks = np.zeros((mask_count, height, width), dtype=np.uint8)
-        i = 0
-        for mask_file in sorted(mask_path.iterdir()):
-            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-            masks[i] = mask
-            i += 1
+        for scene_object_id, object_name in zip(self.scene_object_ids, self.names):
+            for j in range(pose_count):
+                mask_file = mask_path / f"{object_name}_{scene_object_id-1:03d}_{j+1:06d}.png"
+                mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+                masks[(scene_object_id-1) * pose_count + j][mask > 0] = scene_object_id
 
         masks_reshaped = masks.reshape(object_count, pose_count, height, width)
-        rigid_silhouettes = np.sum(masks_reshaped, axis=0).astype(np.uint8)
-        rigid_silhouettes[rigid_silhouettes > 0] = 255
-        return rigid_silhouettes   
+        segmaps = np.sum(masks_reshaped, axis=0).astype(np.uint8)
+
+        return segmaps   
 
     def generate_masks(self):
         vis_masks.create_masks(self.scene_reader, self.scene_id)
@@ -212,7 +226,7 @@ class AnnotationScene:
         for voxel in self.voxel_grid.o3d_grid.get_voxels(): #TODO why not use clear()?
             self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
         for pos in relevant_points:
-            new_voxel = o3d.geometry.Voxel(pos, [0, 0, 1])
+            new_voxel = o3d.geometry.Voxel(pos, [pos[0]/(width/voxel_size), pos[1]/(height/voxel_size), pos[2]/(depth/voxel_size)])
             self.voxel_grid.o3d_grid.add_voxel(new_voxel)
 
         for pose in camera_poses:
@@ -264,12 +278,13 @@ class AnnotationScene:
         return x1
     
     def carve_silhouette(self, image, keep_voxels_outside_image):
-        mask = image.silhouette.astype(np.uint8)
+        mask = image.segmap.astype(np.uint8)
         for obj in image.annotation_objects.values():
             if obj.mask is None:
                 continue
             mask += obj.mask.astype(np.uint8)
         mask[mask > 0] = 1
+        print("debug1")
 
         extrinsic = np.linalg.inv(image.camera_pose.tf)
         silhouette = o3d.geometry.Image(mask.astype(np.float32))
@@ -323,6 +338,11 @@ class VoxelGrid:
         )
 
     def get_voxel_grid_top_down_view(self, z=1):
+        # o3d.visualization.draw_geometries([self.o3d_grid])
+        vis = o3d.visualization.Visualizer()
+        vis.create_window(visible=False)
+        vis.destroy_window()
+
         poi = [self.origin[0] + self.width/2, self.origin[1] + self.height/2, self.origin[2] + self.depth/2]
         renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
 
@@ -347,7 +367,91 @@ class VoxelGrid:
         renderer.setup_camera(intrinsics, extrinsics)
         img = np.asarray(renderer.render_to_image())
         return img
+    
+    def identify_voxels_in_scene(self, scene):
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(
+            scene.img_width, 
+            scene.img_height, 
+            scene.camera_intrinsics[0, 0], 
+            scene.camera_intrinsics[1, 1], 
+            scene.camera_intrinsics[0, 2], 
+            scene.camera_intrinsics[1, 2])
+        vis = o3d.visualization.Visualizer()
 
+        voxel_correspondences = {tuple(voxel.grid_index): [] for voxel in self.o3d_grid.get_voxels()}
+        #iterate over all images that have accepted annotations
+        for image in scene.annotation_images.values():
+            if not image.annotation_accepted:
+                continue
+
+            print("calculating correspondences for image")
+
+            # get camera pose
+            pose = image.camera_pose
+
+            #project voxel grid into image space
+            vis.create_window(width=scene.img_width, height=scene.img_height, visible=False)
+            vis.add_geometry(self.o3d_grid)
+            view_control = vis.get_view_control()
+            param = o3d.camera.PinholeCameraParameters()
+            param.intrinsic = intrinsics
+            param.extrinsic = np.linalg.inv(pose.tf)
+            view_control.convert_from_pinhole_camera_parameters(param, True)
+            #define background color
+            vis.get_render_option().background_color = np.array([0, 0, 0])
+            vis.poll_events()
+            vis.update_renderer()
+            rgb = vis.capture_screen_float_buffer(False)
+            vis.destroy_window()
+
+            grid_position = np.array(rgb)
+            grid_position[:,:,0] = grid_position[:,:,0] * (self.width/self.voxel_size)
+            grid_position[:,:,1] = grid_position[:,:,1] * (self.height/self.voxel_size)
+            grid_position[:,:,2] = grid_position[:,:,2] * (self.depth/self.voxel_size)
+            grid_position = np.round(grid_position).astype(np.int32)
+
+            for i in range(scene.img_height):
+                for j in range(scene.img_width):
+                    
+                    position = tuple(grid_position[i, j])
+                    if position == (0, 0, 0):
+                        continue
+                    if position not in voxel_correspondences:
+                        continue
+                    id = image.segmap[i, j]
+                    if id != 0:
+                        voxel_correspondences[position].append(image.segmap[i, j])
+
+        #for each position get majority vote
+
+        print("majority voting")
+        for position, votes in voxel_correspondences.items():
+            if len(votes) == 0:
+                continue
+            majority_vote = max(set(votes), key=votes.count)
+            voxel_correspondences[position] = majority_vote
+        print("generating colored voxel grid")
+
+        # copy voxel grid and color voxels according to majority vote
+        colored_voxel_grid = deepcopy(self.o3d_grid)
+        voxel_indices = [voxel.grid_index for voxel in colored_voxel_grid.get_voxels()]
+        for voxel_index in voxel_indices:
+            colored_voxel_grid.remove_voxel(voxel_index)
+            if tuple(voxel_index) in voxel_correspondences:
+                color = voxel_correspondences[tuple(voxel_index)]
+                if color == []:
+                    voxelcolor = [0, 0, 0]
+                else:
+                    voxelcolor = [color/len(scene.scene_object_ids), color/len(scene.scene_object_ids), color/len(scene.scene_object_ids)]
+            else:
+                voxelcolor = [0, 0, 0]    
+            voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)
+            colored_voxel_grid.add_voxel(voxel)
+        print("displaying colored voxel grid")
+        o3d.visualization.draw_geometries([colored_voxel_grid])
+
+
+    
     def visualize_colored_meshes(self, meshes):
         def get_random_color():
             return list(np.random.choice(range(256), size=3) / 255.0)

@@ -177,63 +177,118 @@ def voxel_carving_test(scene, scene_id):
         
     o3d.visualization.draw_geometries([voxel_carving_grid])
 
-    # convert voxel grid to numpy array
-    voxel_grid = np.zeros((int(width/voxel_size), int(height/voxel_size), int(depth/voxel_size)))
-    for voxel in voxel_carving_grid.get_voxels():
-        voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 1
-    
-    vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
-    mesh = o3d.geometry.TriangleMesh()
-    vertices_transformed = vertices * voxel_size + [camera_poi[0] - width/2, camera_poi[1] - height/2, camera_poi[2] - depth/2]
-    mesh.vertices = o3d.utility.Vector3dVector(vertices_transformed)
-    mesh.triangles = o3d.utility.Vector3iVector(triangles)
-    o3d.visualization.draw_geometries([mesh])
+    print(voxel_carving_grid.VoxelGrid)
 
-    max_index = np.max(voxel_grid.shape)
-    vertex_colors = np.zeros((len(vertices), 3))
-    print(vertex_colors.shape)
-    for i, vertice in enumerate(vertices):
-        vertex_colors[i] = np.array(vertice/max_index) #TODO we could do boubnding box -> min max scale to one -> keep scaling factor -> rescale -> better quality
-    mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
-    o3d.visualization.draw_geometries([mesh, voxel_carving_grid])
+    voxel_indices = [voxel.grid_index for voxel in voxel_carving_grid.get_voxels()]
+
+    for voxel_index in voxel_indices:
+        #set color to 180, 150, 130
+        voxel_carving_grid.remove_voxel(voxel_index)
+        new_voxel = o3d.geometry.Voxel(voxel_index, [voxel_index[0]/(width/voxel_size), voxel_index[1]/(height/voxel_size), voxel_index[2]/(depth/voxel_size)])
+        voxel_carving_grid.add_voxel(new_voxel)
+
+    o3d.visualization.draw_geometries([voxel_carving_grid])
 
     img_width = scene.get_camera_info_scene(scene_id).width
     img_height = scene.get_camera_info_scene(scene_id).height
     intrinsics = scene.get_camera_info_scene(scene_id).as_o3d()
     extrinsics = np.linalg.inv(camera_poses[0].tf)
 
-    renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
-    renderer.scene.set_background([0, 0, 0, 1])
-    renderer.scene.view.set_post_processing(False)
-    renderer.scene.set_lighting(o3d.visualization.rendering.Open3DScene.LightingProfile.NO_SHADOWS, [0,0,0])
-
-    mtl = o3d.visualization.rendering.MaterialRecord()
-    # mtl.base_color = [1.0, 1.0, 1.0, 1.0]
-    mtl.shader = "defaultUnlit"
-    o3d.visualization.draw_geometries([mesh])
-
-    renderer.scene.add_geometry("mesh", mesh, mtl, True)
-
-    renderer.setup_camera(intrinsics, extrinsics)
-    img = renderer.render_to_image()
-    img = np.array(img)
-
-    # img/255*biggest_index -> position in voxel grid
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(width=img_width, height=img_height, visible=False)
+    vis.add_geometry(voxel_carving_grid)
+    view_control = vis.get_view_control()
+    param = o3d.camera.PinholeCameraParameters()
+    param.intrinsic = intrinsics
+    param.extrinsic = extrinsics
+    view_control.convert_from_pinhole_camera_parameters(param, True)
+    vis.poll_events()
+    vis.update_renderer()
+    rgb = vis.capture_screen_float_buffer(False)
+    img = (np.asarray(rgb)*255).astype(np.uint8)
+    vis.destroy_window()
 
     cv2.imwrite("voxel_carving.png", img)
 
-    id_mesh = deepcopy(mesh)
 
-    masks = []
-    masks_dir = Path(scene.root_dir) / scene.scenes_dir / scene_id / scene.mask_dir
-    print(masks_dir)
-    # object LargerinseFluidA_Bottle.stl
-    for mask_file in sorted(masks_dir.iterdir()):
-        print(mask_file.name.split("_")[0])
-        if mask_file.name.split("_")[0] == "LargeRinseFluidA":
-            mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
-            masks.append(mask)
-            print('hi')
+    rgb = np.array(rgb)
+
+    # find pixels with mathcing colors of voxel grid
+    matching_colors = [voxel.grid_index for voxel in voxel_carving_grid.get_voxels()]
+    for i in range(250,300):
+        print(i)
+        for j in range(600,650):
+            for color in matching_colors:
+                r = int(rgb[i, j, 0]*(width/voxel_size))
+                g = int(rgb[i, j, 1]*(height/voxel_size))
+                b = int(rgb[i, j, 2]*(depth/voxel_size))
+                if ((r, g, b) == color).all():
+                    print("found")
+                    rgb[i, j] = [0, 0, 1]
+                    break
+            # if (rgb[i, j] == matching_colors).all(axis=1).any():
+
+
+    cv2.imwrite("voxel_carving.png", (rgb*255).astype(np.uint8))
+
+
+    # # convert voxel grid to numpy array
+    # voxel_grid = np.zeros((int(width/voxel_size), int(height/voxel_size), int(depth/voxel_size)))
+    # for voxel in voxel_carving_grid.get_voxels():
+    #     voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 1
+    
+    # vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
+    # mesh = o3d.geometry.TriangleMesh()
+    # vertices_transformed = vertices * voxel_size + [camera_poi[0] - width/2, camera_poi[1] - height/2, camera_poi[2] - depth/2]
+    # mesh.vertices = o3d.utility.Vector3dVector(vertices_transformed)
+    # mesh.triangles = o3d.utility.Vector3iVector(triangles)
+    # o3d.visualization.draw_geometries([mesh])
+
+    # max_index = np.max(voxel_grid.shape)
+    # vertex_colors = np.zeros((len(vertices), 3))
+    # print(vertex_colors.shape)
+    # for i, vertice in enumerate(vertices):
+    #     vertex_colors[i] = np.array(vertice/max_index) #TODO we could do boubnding box -> min max scale to one -> keep scaling factor -> rescale -> better quality
+    # mesh.vertex_colors = o3d.utility.Vector3dVector(vertex_colors)
+    # o3d.visualization.draw_geometries([mesh, voxel_carving_grid])
+
+    # img_width = scene.get_camera_info_scene(scene_id).width
+    # img_height = scene.get_camera_info_scene(scene_id).height
+    # intrinsics = scene.get_camera_info_scene(scene_id).as_o3d()
+    # extrinsics = np.linalg.inv(camera_poses[0].tf)
+
+    # renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
+    # renderer.scene.set_background([0, 0, 0, 1])
+    # renderer.scene.view.set_post_processing(False)
+    # renderer.scene.set_lighting(o3d.visualization.rendering.Open3DScene.LightingProfile.NO_SHADOWS, [0,0,0])
+
+    # mtl = o3d.visualization.rendering.MaterialRecord()
+    # # mtl.base_color = [1.0, 1.0, 1.0, 1.0]
+    # mtl.shader = "defaultUnlit"
+    # o3d.visualization.draw_geometries([mesh])
+
+    # renderer.scene.add_geometry("mesh", mesh, mtl, True)
+
+    # renderer.setup_camera(intrinsics, extrinsics)
+    # img = renderer.render_to_image()
+    # img = np.array(img)
+
+    # # img/255*biggest_index -> position in voxel grid
+
+    # cv2.imwrite("voxel_carving.png", img)
+
+    # id_mesh = deepcopy(mesh)
+
+    # masks = []
+    # masks_dir = Path(scene.root_dir) / scene.scenes_dir / scene_id / scene.mask_dir
+    # print(masks_dir)
+    # # object LargerinseFluidA_Bottle.stl
+    # for mask_file in sorted(masks_dir.iterdir()):
+    #     print(mask_file.name.split("_")[0])
+    #     if mask_file.name.split("_")[0] == "LargeRinseFluidA":
+    #         mask = cv2.imread(str(mask_file), cv2.IMREAD_GRAYSCALE)
+    #         masks.append(mask)
+    #         print('hi')
 
     #go through rendered image
     # -> look up id in reference masks
@@ -242,9 +297,9 @@ def voxel_carving_test(scene, scene_id):
     # -> repeat for all pixels of image
     # -> repeat for all fully annotated images
     
-    # -> Object Names
-    # -> Object IDs
-    # -> Segmentation_mask (silhouette but with object id instead of 1)
+    # -> Object Names           DONE
+    # -> Object IDs             DONE
+    # -> Segmentation_mask (silhouette but with object id instead of 1)     DONE
 
     # -> In the beginning of gradio load all object names and ids -> toogle button that overlays segmentation mask over scene
     # -> Ask user what objects to add
