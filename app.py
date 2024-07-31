@@ -6,9 +6,10 @@ import cv2
 from segment_anything import sam_model_registry, SamPredictor
 import numpy as np
 from matplotlib import pyplot as plt
-from dataclasses import dataclass
-from annotation import AnnotationObject, AnnotationImage, AnnotationScene, AnnotationDataset
 import open3d as o3d
+from utils.annotationdataset import AnnotationDataset
+from utils.annotationimage import AnnotationImage, AnnotationObject
+from utils.voxelgrid import VoxelGrid
 
 dataset = None
 predictor = None
@@ -123,6 +124,7 @@ def click_image(image, evt: gr.SelectData):
 
 def js_trigger(input_data, image, annotation_objects_selection):
     global dataset
+    global predictor
 
     print(annotation_objects_selection)
     if annotation_objects_selection is None:
@@ -146,32 +148,7 @@ def js_trigger(input_data, image, annotation_objects_selection):
 
     active_image = dataset.active_scene.active_image
 
-    if active_image.active_object.mask is None:
-        masks, scores, logits = predictor.predict(
-            point_coords=np.array(input_point),
-            point_labels=np.array(input_label),
-            multimask_output=True,
-        )
-
-        active_image.active_object.prompts.append([int(data['x']), int(data['y'])])
-        active_image.active_object.prompts_label.append(int(input_label[0]))
-        active_image.active_object.mask = masks[np.argmax(scores), :, :]
-        active_image.active_object.logit = logits[np.argmax(scores), :, :]
-
-    else:
-
-        active_image.active_object.prompts.append([int(data['x']), int(data['y'])])
-        active_image.active_object.prompts_label.append(int(input_label[0]))
-
-        mask, score, logit = predictor.predict(
-            point_coords=np.array(active_image.active_object.prompts),
-            point_labels=np.array(active_image.active_object.prompts_label),
-            mask_input = active_image.active_object.logit[None, :, :],
-            multimask_output=False,
-        )
-
-        active_image.active_object.mask = mask[0,:,:]
-        active_image.active_object.logit = logit[0,:,:]
+    active_image.add_prompt(input_point, input_label, predictor)
 
     image = active_image.generate_visualization()
     return  -1, image
@@ -229,7 +206,11 @@ def instanciate_voxel_grid():
     global predictor
 
     active_scene = dataset.active_scene
-    button = gr.Button("Seen All Objects", elem_id="seen_all_objects", elem_classes="images", visible=False)
+    button = gr.Button(
+        "Seen All Objects", 
+        elem_id="seen_all_objects", 
+        elem_classes="images", 
+        visible=False)
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
     active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.01)
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
@@ -248,7 +229,9 @@ def accept_annotation(voxel_image, keep_voxels_outside_image):
     active_image = active_scene.active_image
     active_image.annotation_accepted = True
     if active_scene.voxel_grid is not None:
-        active_scene.carve_silhouette(active_image, keep_voxels_outside_image=keep_voxels_outside_image)
+        active_scene.carve_silhouette(
+            active_image, 
+            keep_voxels_outside_image=keep_voxels_outside_image)
         voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     return voxel_image
 
@@ -304,30 +287,92 @@ def main(dataset_path):
 
         with gr.Row():
             with gr.Column(scale=8):
-                prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=False, interactive=False) 
+                prompting_image = gr.Image(
+                    label="Upload Image", 
+                    elem_id="prompting_image", 
+                    elem_classes="images", 
+                    visible=False, 
+                    interactive=False) 
             with gr.Column(scale=2):
-                annotation_object_name_tb = gr.Textbox(label="Object you want to annotate", elem_id="prompting_text", elem_classes="images", visible=True)
-                add_annotation_object_btn = gr.Button("Add Object", elem_id="add_annotation_object", elem_classes="images", visible=True)
-                annotation_objects_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=True)
-                seen_all_objects_btn = gr.Button("Seen All Objects fully", elem_id="seen_all_objects", elem_classes="images", visible=True)
+                annotation_object_name_tb = gr.Textbox(
+                    label="Object you want to annotate", 
+                    elem_id="prompting_text", 
+                    elem_classes="images", 
+                    visible=True)
+                add_annotation_object_btn = gr.Button(
+                    "Add Object", 
+                    elem_id="add_annotation_object", 
+                    elem_classes="images", 
+                    visible=True)
+                annotation_objects_selection = gr.Radio(
+                    label="Select Object", 
+                    elem_id="annotation_objects", 
+                    elem_classes="images", 
+                    visible=True)
+                seen_all_objects_btn = gr.Button(
+                    "Seen All Objects fully", 
+                    elem_id="seen_all_objects", 
+                    elem_classes="images", 
+                    visible=True)
                 with gr.Row():
                     with gr.Column(min_width=100):
                         accept_annotation_all_in_view_btn = gr.Button("Accept, all objects in view")
                     with gr.Column(min_width=100):
                         accept_annotation_btn = gr.Button("Accept, not all objects in view\n")
-                voxel_image = gr.Image(label="Voxel Grid", elem_id="voxel_image", elem_classes="images", visible=True, interactive=False)
-                show_grid_btn = gr.Button("Show Voxel Grid", elem_id="show_grid", elem_classes="images", visible=True)
-                manual_annotation_done_btn = gr.Button("Manual Annotation Done", elem_id="manual_annotation_done", elem_classes="images", visible=True)
-        folder_selection.change(load_scene, inputs=[folder_selection, prompting_image], outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image])
-        img_selection.change(change_image, inputs=[img_selection], outputs=[prompting_image])
-        prompting_image.select(click_image, [prompting_image])
-        add_annotation_object_btn.click(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
-        annotation_object_name_tb.submit(add_object, [annotation_object_name_tb, prompting_image], [annotation_object_name_tb, annotation_objects_selection, prompting_image])
-        annotation_objects_selection.change(change_annotation_object, [annotation_objects_selection], [prompting_image])
-        js_parser.input(js_trigger, [js_parser, prompting_image, annotation_objects_selection], [js_parser, prompting_image])
-        seen_all_objects_btn.click(instanciate_voxel_grid ,outputs=[seen_all_objects_btn, status_md, voxel_image])
-        accept_annotation_btn.click(accept_annotation, [voxel_image, gr.State(True)], [voxel_image])
-        accept_annotation_all_in_view_btn.click(accept_annotation, [voxel_image, gr.State(False)], [voxel_image])
+                voxel_image = gr.Image(
+                    label="Voxel Grid", 
+                    elem_id="voxel_image", 
+                    elem_classes="images", 
+                    visible=True, 
+                    interactive=False)
+                show_grid_btn = gr.Button(
+                    "Show Voxel Grid", 
+                    elem_id="show_grid", 
+                    elem_classes="images", 
+                    visible=True)
+                manual_annotation_done_btn = gr.Button(
+                    "Manual Annotation Done", 
+                    elem_id="manual_annotation_done", 
+                    elem_classes="images", 
+                    visible=True)
+        folder_selection.change(
+            load_scene, 
+            inputs=[folder_selection, prompting_image], 
+            outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image])
+        img_selection.change(
+            change_image, 
+            inputs=[img_selection], 
+            outputs=[prompting_image])
+        prompting_image.select(
+            click_image, 
+            [prompting_image])
+        add_annotation_object_btn.click(
+            add_object, 
+            [annotation_object_name_tb, prompting_image], 
+            [annotation_object_name_tb, annotation_objects_selection, prompting_image])
+        annotation_object_name_tb.submit(
+            add_object, 
+            [annotation_object_name_tb, prompting_image], 
+            [annotation_object_name_tb, annotation_objects_selection, prompting_image])
+        annotation_objects_selection.change(
+            change_annotation_object, 
+            [annotation_objects_selection], 
+            [prompting_image])
+        js_parser.input(
+            js_trigger, 
+            [js_parser, prompting_image, annotation_objects_selection], 
+            [js_parser, prompting_image])
+        seen_all_objects_btn.click(
+            instanciate_voxel_grid,
+            outputs=[seen_all_objects_btn, status_md, voxel_image])
+        accept_annotation_btn.click(
+            accept_annotation, 
+            [voxel_image, gr.State(True)], 
+            [voxel_image])
+        accept_annotation_all_in_view_btn.click(
+            accept_annotation, 
+            [voxel_image, gr.State(False)], 
+            [voxel_image])
         manual_annotation_done_btn.click(manual_annotation_done)
 
         show_grid_btn.click(show_voxel_grid)
