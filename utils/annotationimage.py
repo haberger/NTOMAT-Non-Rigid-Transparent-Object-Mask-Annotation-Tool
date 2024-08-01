@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass
+from scipy.spatial.distance import cdist
 
 @dataclass
 class AnnotationObject:
