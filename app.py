@@ -251,6 +251,11 @@ def manual_annotation_done():
     active_scene = dataset.active_scene
     active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
 
+    for image in active_scene.annotation_images.values():
+        if image.annotation_accepted:
+            continue
+        image.generate_auto_prompts(active_scene)
+
 
 def main(dataset_path):
     global dataset

@@ -2,6 +2,7 @@ import open3d as o3d
 import numpy as np
 import mcubes
 from copy import deepcopy
+import cv2
 
 class VoxelGrid:
     def __init__(self, width, height, depth, voxel_size, origin, color):
@@ -11,6 +12,7 @@ class VoxelGrid:
         self.voxel_size = voxel_size
         self.origin = origin
         self.color = color
+        self.o3d_grid_id = None
         self.o3d_grid = o3d.geometry.VoxelGrid.create_dense(
             origin=self.origin,
             color=self.color,
@@ -22,9 +24,9 @@ class VoxelGrid:
 
     def get_voxel_grid_top_down_view(self, z=1):
         # o3d.visualization.draw_geometries([self.o3d_grid])
-        vis = o3d.visualization.Visualizer()
-        vis.create_window(visible=False)
-        vis.destroy_window()
+        # vis = o3d.visualization.Visualizer()
+        # vis.create_window(visible=False)
+        # vis.destroy_window()
 
         poi = [self.origin[0] + self.width/2, self.origin[1] + self.height/2, self.origin[2] + self.depth/2]
         renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
@@ -133,11 +135,12 @@ class VoxelGrid:
                 if color == []:
                     voxelcolor = [0, 0, 0]
                 else:
-                    voxelcolor = [color/len(scene.scene_object_ids), color/len(scene.scene_object_ids), color/len(scene.scene_object_ids)]
+                    voxelcolor = [(1/255)*color, (1/255)*color, (1/255)*color]
             else:
                 voxelcolor = [0, 0, 0]    
             voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)
             colored_voxel_grid.add_voxel(voxel)
+        self.o3d_grid_id = colored_voxel_grid
         print("displaying colored voxel grid")
         o3d.visualization.draw_geometries([colored_voxel_grid])
 
@@ -197,3 +200,33 @@ class VoxelGrid:
             )
             separate_meshes.append(mesh_cluster)
         self.visualize_colored_meshes(separate_meshes)
+
+    def project_voxelgrid(self, img_width, img_height, intrinsics, cam_pose=None, voxelgrid=None):
+
+        # vis = o3d.visualization.Visualizer()
+        # vis.create_window(visible=False)
+        # vis.destroy_window()
+        #visualize voxelgrid
+        o3d.visualization.draw_geometries([voxelgrid])
+
+        renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
+        renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
+        renderer.scene.view.set_post_processing(False)
+
+        mtl = o3d.visualization.rendering.MaterialRecord()
+        # mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
+        mtl.shader = "defaultUnlit"
+
+        renderer.scene.clear_geometry()
+        renderer.scene.add_geometry("grid", voxelgrid, mtl)
+
+        intrinsics = o3d.camera.PinholeCameraIntrinsic(img_width, img_height, intrinsics[0, 0], intrinsics[1, 1], intrinsics[0, 2], intrinsics[1, 2])
+        #extrensics: translation 2 meters above self.poi in z. Looking down
+        
+        pose = cam_pose
+        print(pose)
+        extrinsics = np.linalg.inv(pose.tf)
+
+        renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(renderer.render_to_image()).astype(np.uint8)
+        return img
