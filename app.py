@@ -260,6 +260,7 @@ def manual_annotation_done():
         if image.annotation_accepted:
             continue
         image.generate_auto_prompts(active_scene)
+        break
 
 def update_object_library(id_tb, name_tb, description_tb, obj_library_df):
     global dataset

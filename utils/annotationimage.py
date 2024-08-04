@@ -62,11 +62,36 @@ class AnnotationImage:
         #1. generate mask from voxelgrid
         # -> get new segmentation map from voxelgrid (use offscreen rednerer project to pose)
         voxelgrid = scene.voxel_grid
-        voxelgrid.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, self.camera_pose, voxelgrid.o3d_grid_id)
+        voxelgrid_segmap = voxelgrid.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, self.camera_pose, voxelgrid.o3d_grid_id)
 
         #TODO add annotation_objects to scene_ids-> assign scene ids
 
         #2. for every object in annotation object
+
+        print("generating prompts")
+
+        for obj in self.annotation_objects.values():
+            if obj.mask is not None:
+                continue
+            mask = np.zeros_like(voxelgrid_segmap)
+            mask[voxelgrid_segmap == obj.scene_object_id] = 1
+
+            #3. generate prompts
+            prompt_points = self.get_prompt_points_from_mask(mask)
+            for point in prompt_points:
+                self.active_object = obj
+                self.add_prompt([point], [1], scene.predictor)
+
+            for scene_object_id in scene.scene_object_ids:
+                if scene_object_id != obj.scene_object_id:
+                    mask = np.zeros_like(voxelgrid_segmap)
+                    mask[voxelgrid_segmap == scene_object_id] = 1
+
+                    prompt_points = self.get_prompt_points_from_mask(mask)
+                    for point in prompt_points:
+                        self.active_object = obj
+                        self.add_prompt([point], [0], scene.predictor)
+        print("prompts generated")
         # -> get mask from segmentation map
         # -> generate positive prompts using get_prompt_points_from_mask
         # -> generate negative prompts using get_prompt_points_from_mask for all other objects
@@ -75,7 +100,10 @@ class AnnotationImage:
         # -> add prompt to annotation object using add_prompt
 
         #TODO on write update obejcts.library
-
+        img = self.generate_visualization()
+        cv2.imshow('auto_prompts', img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
         pass
 
     def get_prompt_points_from_mask(self, mask):
@@ -111,6 +139,7 @@ class AnnotationImage:
                 all_points.append(segment_points[center_index])
 
         centers = np.array(all_points, dtype=np.int32)
+        return centers
 
     def generate_visualization(self):
         image = cv2.imread(self.rgb_path)
@@ -154,6 +183,6 @@ class AnnotationImage:
         segmap = self.segmap
         for obj in self.annotation_objects.values():
             if obj.mask is not None:
-                segmap[obj.mask > 0] = obj.dataset_object_id
+                segmap[obj.mask > 0] = obj.scene_object_id
         return segmap
 

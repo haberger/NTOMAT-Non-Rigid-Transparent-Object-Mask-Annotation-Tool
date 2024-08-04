@@ -3,6 +3,9 @@ import numpy as np
 import mcubes
 from copy import deepcopy
 import cv2
+import time
+from scipy.ndimage import generic_filter
+from scipy.stats import mode
 
 class VoxelGrid:
     def __init__(self, width, height, depth, voxel_size, origin, color):
@@ -71,6 +74,7 @@ class VoxelGrid:
 
             print("calculating correspondences for image")
 
+            start_time = time.time()
             # get camera pose
             pose = image.camera_pose
 
@@ -96,6 +100,7 @@ class VoxelGrid:
             # cv2.waitKey(0)
             # cv2.destroyAllWindows()
 
+            print(f"projection time: {time.time()-start_time}")
 
             grid_position = np.array(rgb)
             grid_position[:,:,0] = grid_position[:,:,0] * (self.width/self.voxel_size)
@@ -103,26 +108,98 @@ class VoxelGrid:
             grid_position[:,:,2] = grid_position[:,:,2] * (self.depth/self.voxel_size)
             grid_position = np.round(grid_position).astype(np.int32)
 
-            for i in range(scene.img_height):
-                for j in range(scene.img_width):
-                    
-                    position = tuple(grid_position[i, j])
-                    if position == (0, 0, 0):
-                        continue
-                    if position not in voxel_correspondences:
-                        continue
-                    id = image.get_complete_segmap()[i, j]
-                    if id != 0:
-                        voxel_correspondences[position].append(id)
+            loop_start_time = time.time()
 
+            valid_positions = (grid_position != (0, 0, 0)).all(axis=-1)
+            non_zero_ids = (image.get_complete_segmap() != 0)
+
+            valid_positions_flat = valid_positions.ravel()
+            non_zero_ids_flat = non_zero_ids.ravel()
+            combined_mask = valid_positions_flat & non_zero_ids_flat
+
+            valid_grid_positions = grid_position.reshape(-1, 3)[combined_mask]
+            valid_ids = image.get_complete_segmap().ravel()[combined_mask]
+
+            for pos, id in zip(map(tuple, valid_grid_positions), valid_ids):
+                if pos in voxel_correspondences:
+                    voxel_correspondences[pos].append(id)
+
+            print(f"loop time: {time.time()-loop_start_time}")
+            print(f"correspondence time: {time.time()-start_time}")
         #for each position get majority vote
 
-        print("majority voting")
+        # print("majority voting")
+        # for position, votes in voxel_correspondences.items():
+        #     if len(votes) == 0:
+        #         continue
+        #     unique, counts = np.unique(votes, return_counts=True)
+
+        #     if len(unique) == 1:
+        #         majority_vote = unique[0]
+        #         voxel_correspondences[position] = majority_vote
+        #         continue
+
+        #     #sort unique and counts decreasing
+        #     sorted_idx = np.argsort(-counts)
+        #     unique = unique[sorted_idx]
+        #     counts = counts[sorted_idx]
+        #     majority_vote = unique[0] if counts[0]/counts[1] > 1.5 else 0
+        #     voxel_correspondences[position] = majority_vote
+        
+        def mode_filter(values):
+            """Calculates the mode (most frequent value) of a neighborhood."""
+            unique, counts = np.unique(values, return_counts=True)
+            if len(unique) == 1:
+                return unique[0]
+            sorted_idx = np.argsort(-counts)
+            unique = unique[sorted_idx]
+            counts = counts[sorted_idx]
+            if counts[0] / counts[1] > 1.5:
+                if unique[0] != 0:
+                    return unique[0]
+                elif counts[0] / sum(counts[1:]) > 7:
+                    return 0
+            return 256
+
+        print("majority voting with neighborhood analysis")
+
+        # Convert voxel_correspondences to a 3D grid for neighborhood filtering
+        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)), dtype=np.uint32)
+        print(voxel_grid.shape)
+        for position, vote in voxel_correspondences.items():
+            if len(vote) == 0:
+                continue
+            # set it to majority vote
+            voxel_grid[position] = max(set(vote), key=vote.count)
+
+        print("get_neighborhood_votes")
+        # Apply neighborhood analysis (3x3x3 window)
+        neighborhood_votes = generic_filter(voxel_grid, mode_filter, size=3, mode='constant', cval=0)
+
+        print("combine neighborhood votes with majority voting")
+
+        # Combine neighborhood votes with majority voting
         for position, votes in voxel_correspondences.items():
             if len(votes) == 0:
                 continue
-            majority_vote = max(set(votes), key=votes.count)
-            voxel_correspondences[position] = majority_vote
+
+            unique, counts = np.unique(votes, return_counts=True)
+
+            if len(unique) == 1:
+                voxel_correspondences[position] = unique[0]
+                continue
+
+            sorted_idx = np.argsort(-counts)
+            unique = unique[sorted_idx]
+            counts = counts[sorted_idx]
+
+            neighborhood_vote = neighborhood_votes[position]
+            if neighborhood_vote != 256:
+                voxel_correspondences[position] = neighborhood_vote
+            elif counts[0] / counts[1] > 1.5:  # Consistent votes
+                voxel_correspondences[position] = unique[0]
+            else:
+                voxel_correspondences[position] = 0
         print("generating colored voxel grid")
 
         # copy voxel grid and color voxels according to majority vote
@@ -141,9 +218,6 @@ class VoxelGrid:
             voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)
             colored_voxel_grid.add_voxel(voxel)
         self.o3d_grid_id = colored_voxel_grid
-        print("displaying colored voxel grid")
-        o3d.visualization.draw_geometries([colored_voxel_grid])
-
 
     
     def visualize_colored_meshes(self, meshes):
@@ -207,7 +281,6 @@ class VoxelGrid:
         # vis.create_window(visible=False)
         # vis.destroy_window()
         #visualize voxelgrid
-        o3d.visualization.draw_geometries([voxelgrid])
 
         renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
         renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
@@ -229,4 +302,11 @@ class VoxelGrid:
 
         renderer.setup_camera(intrinsics, extrinsics)
         img = np.asarray(renderer.render_to_image()).astype(np.uint8)
+
+        #do some majority filtering to smooth out the segmap
+
+        # cv2.imshow("voxelgrid", img*10)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
+
         return img
