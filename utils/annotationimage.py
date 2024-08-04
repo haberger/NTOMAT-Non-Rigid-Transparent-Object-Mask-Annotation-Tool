@@ -10,6 +10,9 @@ class AnnotationObject:
     mask: np.ndarray
     logit: np.ndarray
     label: str
+    dataset_object_id: str
+    scene_object_id: str
+    
 
 class AnnotationImage:
     def __init__(self, rgb_path, camera_pose, rigid_segmap=None):
@@ -70,6 +73,8 @@ class AnnotationImage:
 
         # 3. for each prompt
         # -> add prompt to annotation object using add_prompt
+
+        #TODO on write update obejcts.library
 
         pass
 
@@ -144,4 +149,11 @@ class AnnotationImage:
             cv2.rectangle(overlay, (x-2, y-2), (x+2, y+2), dot_color, -1)
 
         return overlay
+    
+    def get_complete_segmap(self):
+        segmap = self.segmap
+        for obj in self.annotation_objects.values():
+            if obj.mask is not None:
+                segmap[obj.mask > 0] = obj.dataset_object_id
+        return segmap
 

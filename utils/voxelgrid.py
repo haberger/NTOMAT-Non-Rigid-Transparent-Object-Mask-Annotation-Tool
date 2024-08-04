@@ -111,9 +111,9 @@ class VoxelGrid:
                         continue
                     if position not in voxel_correspondences:
                         continue
-                    id = image.segmap[i, j]
+                    id = image.get_complete_segmap()[i, j]
                     if id != 0:
-                        voxel_correspondences[position].append(image.segmap[i, j])
+                        voxel_correspondences[position].append(id)
 
         #for each position get majority vote
 
@@ -131,11 +131,11 @@ class VoxelGrid:
         for voxel_index in voxel_indices:
             colored_voxel_grid.remove_voxel(voxel_index)
             if tuple(voxel_index) in voxel_correspondences:
-                color = voxel_correspondences[tuple(voxel_index)]
-                if color == []:
+                object_id = voxel_correspondences[tuple(voxel_index)]
+                if object_id == []:
                     voxelcolor = [0, 0, 0]
                 else:
-                    voxelcolor = [(1/255)*color, (1/255)*color, (1/255)*color]
+                    voxelcolor = [(1/255)*object_id, (1/255)*object_id, (1/255)*object_id]
             else:
                 voxelcolor = [0, 0, 0]    
             voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)

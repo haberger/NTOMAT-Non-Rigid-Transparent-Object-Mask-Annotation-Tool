@@ -1,5 +1,8 @@
 from utils.v4r import SceneFileReader
 from utils.annotationscene import AnnotationScene
+import yaml
+import pandas as pd
+import os
 
 class AnnotationDataset:
     def __init__(self, dataset_path, config="config.cfg"):
@@ -8,6 +11,8 @@ class AnnotationDataset:
         self.annotation_scenes = {}
         self.active_scene = None
         self.load_scenes()
+        self.object_library = self.yaml_to_dataframe(self.scene_reader.get_object_library_path())
+
 
     def load_scenes(self):
         scene_ids = self.scene_reader.get_scene_ids()
@@ -18,3 +23,40 @@ class AnnotationDataset:
 
     def get_scene_ids(self):
         return self.annotation_scenes.keys()
+    
+    def yaml_to_dataframe(self, file_path):
+        """
+        Converts a YAML file containing a list of dictionaries into a Pandas DataFrame.
+        
+        Args:
+            file_path (str): The path to the YAML file.
+
+        Returns:
+            pandas.DataFrame: A DataFrame representing the YAML data. If an error occurs (e.g., file not found), returns None.
+        """
+        try:
+            with open(file_path, 'r') as file:
+                data = yaml.safe_load(file)
+
+            # Check if data is a list of dictionaries (the expected format)
+            if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
+                raise ValueError("Invalid YAML format: Expected a list of dictionaries.")
+
+            # Convert to DataFrame and handle missing values
+            df = pd.DataFrame(data)
+            df = df.fillna("")  # Replace potential NaN values with empty strings
+
+            # Add full mesh path using file_path as base directory
+            # df['mesh'] = df['mesh'].apply(lambda mesh_file: os.path.join(os.path.dirname(file_path), mesh_file))
+
+            return df
+
+        except FileNotFoundError:
+            print(f"File not found: {file_path}")
+            return None
+        except yaml.YAMLError as e:
+            print(f"Error parsing YAML: {e}")
+            return None
+        except ValueError as e:
+            print(e)
+            return None

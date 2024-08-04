@@ -384,3 +384,6 @@ class SceneFileReader:
     
     def get_images_mask_path(self, scene_id):
         return os.path.join(self.root_dir, self.scenes_dir, scene_id, self.mask_dir)
+    
+    def get_object_library_path(self):
+        return os.path.join(self.root_dir, self.object_library_file)
