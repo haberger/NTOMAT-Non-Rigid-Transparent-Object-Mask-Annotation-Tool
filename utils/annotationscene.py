@@ -6,6 +6,7 @@ import cv2
 from utils.annotationimage import AnnotationImage
 from utils.voxelgrid import VoxelGrid
 import utils.vis_masks as vis_masks
+import pickle
 
 class AnnotationScene:
     def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
@@ -17,9 +18,70 @@ class AnnotationScene:
         self.camera_intrinsics = camera_intrinsics
         self.img_width = img_width
         self.img_height = img_height
-        self.poi = self.get_cameras_point_of_interest()
-        self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
+        if scene_reader is not None:
+            self.poi = self.get_cameras_point_of_interest()
+            self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
+        else:
+            self.poi = None
+            self.dataset_object_ids = None
+            self.names = None
+            self.scene_object_ids = None
         # -> list object names in the beginning. let annotater add to the list object name and count 
+
+    def scene_to_pickle(self, folder="../debug_data_promptgeneration"):
+        path = Path(folder)
+        with open(path/"scene_id.pkl", "wb") as f:
+            pickle.dump(self.scene_id, f)
+        with open(path/"scene_reader.pkl", "wb") as f:
+            pickle.dump(self.scene_reader, f)
+        with open(path/"camera_intrinsics.pkl", "wb") as f:
+            pickle.dump(self.camera_intrinsics, f)
+        with open(path/"img_width.pkl", "wb") as f:
+            pickle.dump(self.img_width, f)
+        with open(path/"img_height.pkl", "wb") as f:
+            pickle.dump(self.img_height, f)
+        with open(path/"poi.pkl", "wb") as f:
+            pickle.dump(self.poi, f)
+        with open(path/"dataset_object_ids.pkl", "wb") as f:
+            pickle.dump(self.dataset_object_ids, f)
+        with open(path/"names.pkl", "wb") as f:
+            pickle.dump(self.names, f)
+        with open(path/"scene_object_ids.pkl", "wb") as f:
+            pickle.dump(self.scene_object_ids, f)
+        with open(path/"annotation_images.pkl", "wb") as f:
+            pickle.dump(self.annotation_images, f)
+        with open(path/"active_image.pkl", "wb") as f:
+            pickle.dump(self.active_image, f)
+        
+        self.voxel_grid.save_voxelgrid(path)
+
+    def scene_from_pickle(self, folder="../debug_data_promptgeneration"):
+        path = Path(folder)
+        with open(path/"scene_id.pkl", "rb") as f:
+            self.scene_id = pickle.load(f)
+        with open(path/"scene_reader.pkl", "rb") as f:
+            self.scene_reader = pickle.load(f)
+        with open(path/"camera_intrinsics.pkl", "rb") as f:
+            self.camera_intrinsics = pickle.load(f)
+        with open(path/"img_width.pkl", "rb") as f:
+            self.img_width = pickle.load(f)
+        with open(path/"img_height.pkl", "rb") as f:
+            self.img_height = pickle.load(f)
+        with open(path/"poi.pkl", "rb") as f:
+            self.poi = pickle.load(f)
+        with open(path/"dataset_object_ids.pkl", "rb") as f:
+            self.dataset_object_ids = pickle.load(f)
+        with open(path/"names.pkl", "rb") as f:
+            self.names = pickle.load(f)
+        with open(path/"scene_object_ids.pkl", "rb") as f:
+            self.scene_object_ids = pickle.load(f)
+        with open(path/"annotation_images.pkl", "rb") as f:
+            self.annotation_images = pickle.load(f)
+        with open(path/"active_image.pkl", "rb") as f:
+            self.active_image = pickle.load(f)
+        
+        self.voxel_grid = VoxelGrid()
+        self.voxel_grid.load_voxelgrid(path)
 
     def get_object_metadata(self):
         objects_data = self.scene_reader.get_object_poses(self.scene_id)

@@ -6,9 +6,10 @@ import cv2
 import time
 from scipy.ndimage import generic_filter
 from scipy.stats import mode
+import pickle
 
 class VoxelGrid:
-    def __init__(self, width, height, depth, voxel_size, origin, color):
+    def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None):
         self.width = width
         self.height = height
         self.depth = depth
@@ -16,6 +17,77 @@ class VoxelGrid:
         self.origin = origin
         self.color = color
         self.o3d_grid_id = None
+        if width is not None and height is not None and depth is not None:
+            self.o3d_grid = o3d.geometry.VoxelGrid.create_dense(
+                origin=origin,
+                color=color,
+                voxel_size=voxel_size,
+                width=width,
+                height=height,
+                depth=depth
+            )
+        else:
+            self.o3d_grid = None
+
+    def __init__(self):
+        self.width = None
+        self.height = None
+        self.depth = None
+        self.voxel_size = None
+        self.origin = None
+        self.color = None
+        self.o3d_grid_id = None
+        self.o3d_grid = None
+
+    def save_voxelgrid(self, path):
+        with open(path/"voxel_grid_width.pkl", "wb") as f:
+            pickle.dump(self.width, f)
+        with open(path/"voxel_grid_height.pkl", "wb") as f:
+            pickle.dump(self.height, f)
+        with open(path/"voxel_grid_depth.pkl", "wb") as f:
+            pickle.dump(self.depth, f)
+        with open(path/"voxel_grid_voxel_size.pkl", "wb") as f:
+            pickle.dump(self.voxel_size, f)
+        with open(path/"voxel_grid_origin.pkl", "wb") as f:
+            pickle.dump(self.origin, f)
+        with open(path/"voxel_grid_color.pkl", "wb") as f:
+            pickle.dump(self.color, f)
+        with open(path/"voxel_grid_id.pkl", "wb") as f:
+            pickle.dump(self.o3d_grid_id, f)
+        
+
+        colors = []
+        grid_indexes = []
+        for voxel in self.o3d_grid.get_voxels():
+            color = voxel.color
+            grid_index = voxel.grid_index
+            colors.append(color)
+            grid_indexes.append(grid_index)
+        with open(path/"voxel_grid_colors.pkl", "wb") as f:
+            pickle.dump(colors, f)
+        with open(path/"voxel_grid_grid_indexes.pkl", "wb") as f:
+            pickle.dump(grid_indexes, f)
+
+    def load_voxelgrid(self, path):
+        with open(path/"voxel_grid_width.pkl", "rb") as f:
+            self.width = pickle.load(f)
+        with open(path/"voxel_grid_height.pkl", "rb") as f:
+            self.height = pickle.load(f)
+        with open(path/"voxel_grid_depth.pkl", "rb") as f:
+            self.depth = pickle.load(f)
+        with open(path/"voxel_grid_voxel_size.pkl", "rb") as f:
+            self.voxel_size = pickle.load(f)
+        with open(path/"voxel_grid_origin.pkl", "rb") as f:
+            self.origin = pickle.load(f)
+        with open(path/"voxel_grid_color.pkl", "rb") as f:
+            self.color = pickle.load(f)
+        with open(path/"voxel_grid_id.pkl", "rb") as f:
+            self.o3d_grid_id = pickle.load(f)
+
+        with open(path/"voxel_grid_colors.pkl", "rb") as f:
+            colors = pickle.load(f)
+        with open(path/"voxel_grid_grid_indexes.pkl", "rb") as f:
+            grid_indexes = pickle.load(f)
         self.o3d_grid = o3d.geometry.VoxelGrid.create_dense(
             origin=self.origin,
             color=self.color,
@@ -24,6 +96,16 @@ class VoxelGrid:
             height=self.height,
             depth=self.depth
         )
+
+        voxels = self.o3d_grid.get_voxels()
+        # remove all voxels
+        for voxel in voxels:
+            self.o3d_grid.remove_voxel(voxel.grid_index)
+        for color, grid_index in zip(colors, grid_indexes):
+            voxel = o3d.geometry.Voxel(grid_index, color)
+            self.o3d_grid.add_voxel(voxel)
+
+        return self
 
     def get_voxel_grid_top_down_view(self, z=1):
         # o3d.visualization.draw_geometries([self.o3d_grid])

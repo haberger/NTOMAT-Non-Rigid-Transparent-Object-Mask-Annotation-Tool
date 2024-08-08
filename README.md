@@ -1,1 +1,1 @@
-nice work
+conda env create -f env.yml

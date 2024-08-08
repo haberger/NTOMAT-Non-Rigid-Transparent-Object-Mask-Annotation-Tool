@@ -11,6 +11,7 @@ from utils.annotationdataset import AnnotationDataset
 from utils.annotationimage import AnnotationImage, AnnotationObject
 from utils.voxelgrid import VoxelGrid
 import pandas as pd
+import pickle
 
 dataset = None
 predictor = None
@@ -217,7 +218,7 @@ def instanciate_voxel_grid():
         elem_classes="images", 
         visible=False)
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
-    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.01)
+    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.008)
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
     image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     #save image 
@@ -240,7 +241,6 @@ def accept_annotation(voxel_image, keep_voxels_outside_image):
         voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     return voxel_image
 
-
 def show_voxel_grid():
     global dataset
     global predictor
@@ -254,12 +254,19 @@ def manual_annotation_done():
     global predictor
 
     active_scene = dataset.active_scene
+
+    #write dataset to pickle into debug_data_promptgeneration
+    active_scene.scene_to_pickle("debug_data_promptgeneration")
+
     active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
 
     for image in active_scene.annotation_images.values():
         if image.annotation_accepted:
             continue
-        image.generate_auto_prompts(active_scene)
+        rgb = cv2.imread(image.rgb_path, cv2.IMREAD_COLOR)
+        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
+        predictor.set_image(rgb)
+        image.generate_auto_prompts(active_scene, predictor)
         break
 
 def update_object_library(id_tb, name_tb, description_tb, obj_library_df):

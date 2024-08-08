@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 from scipy.spatial.distance import cdist
+import matplotlib.pyplot as plt
 
 @dataclass
 class AnnotationObject:
@@ -54,7 +55,7 @@ class AnnotationImage:
         #write mask with unique id using cv2
         cv2.imwrite('mask_tube.png', self.active_object.mask.astype(np.uint8)*255)
 
-    def generate_auto_prompts(self, scene):
+    def generate_auto_prompts(self, scene, predictor):
         '''
         takes an annotation object and generates prompts for it
         '''
@@ -63,7 +64,7 @@ class AnnotationImage:
         # -> get new segmentation map from voxelgrid (use offscreen rednerer project to pose)
         voxelgrid = scene.voxel_grid
         voxelgrid_segmap = voxelgrid.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, self.camera_pose, voxelgrid.o3d_grid_id)
-
+        voxelgrid_segmap = voxelgrid_segmap[:,:,0]
         #TODO add annotation_objects to scene_ids-> assign scene ids
 
         #2. for every object in annotation object
@@ -72,25 +73,41 @@ class AnnotationImage:
 
         for obj in self.annotation_objects.values():
             if obj.mask is not None:
+                print("mask not none")
                 continue
             mask = np.zeros_like(voxelgrid_segmap)
-            mask[voxelgrid_segmap == obj.scene_object_id] = 1
+            mask[voxelgrid_segmap == obj.scene_object_id] = 255
 
+            #show mask
+            cv2.imshow('mask', mask.astype(np.uint8))
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
             #3. generate prompts
             prompt_points = self.get_prompt_points_from_mask(mask)
+
+            # visualize prompt point on rgb image
+            img = cv2.imread(self.rgb_path)
+            for point in prompt_points:
+                cv2.circle(img, (point[1], point[0]), 3, (0, 255, 0), -1)
+            cv2.imshow('prompt_points', img)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+
+
             for point in prompt_points:
                 self.active_object = obj
-                self.add_prompt([point], [1], scene.predictor)
+                self.add_prompt([[point[1], point[0]]], [1], predictor)
 
             for scene_object_id in scene.scene_object_ids:
                 if scene_object_id != obj.scene_object_id:
                     mask = np.zeros_like(voxelgrid_segmap)
-                    mask[voxelgrid_segmap == scene_object_id] = 1
+                    mask[voxelgrid_segmap == scene_object_id] = 255
 
-                    prompt_points = self.get_prompt_points_from_mask(mask)
+                    prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True)
                     for point in prompt_points:
                         self.active_object = obj
-                        self.add_prompt([point], [0], scene.predictor)
+                        self.add_prompt([[point[1], point[0]]], [0], predictor)
         print("prompts generated")
         # -> get mask from segmentation map
         # -> generate positive prompts using get_prompt_points_from_mask
@@ -101,13 +118,29 @@ class AnnotationImage:
 
         #TODO on write update obejcts.library
         img = self.generate_visualization()
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         cv2.imshow('auto_prompts', img)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         pass
 
-    def get_prompt_points_from_mask(self, mask):
-        skeleton = cv2.ximgproc.thinning(cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY))
+    def get_prompt_points_from_mask(self, mask, debug_visualization=False):
+        # show mask
+        print(mask.dtype)
+        print(type(mask))
+        print(np.min(mask))
+        print(np.max(mask))
+        cv2.imshow('mask', mask)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+
+        skeleton = cv2.ximgproc.thinning(mask)
+
+        #show skeleton
+        cv2.imshow('skeleton', skeleton.astype(np.uint8))
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
         num_labels, labels = cv2.connectedComponents(skeleton)
         num_points_per_segment = 1
@@ -121,8 +154,11 @@ class AnnotationImage:
             segment_mask = (labels == label).astype(np.uint8)
             segment_points = np.argwhere(segment_mask > 0)
             segment_points = segment_points.reshape(-1, 2)
+            print(f"""Segment {label} has {len(segment_points)} points""")
+            print(num_points_per_segment[label])
+            print(segment_points.shape)
 
-            if len(segment_points) >= num_points_per_segment[label]:
+            if len(segment_points) > num_points_per_segment[label]:
                 # Perform k-means
                 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
                 _, _, centers = cv2.kmeans(segment_points.astype(np.float32), num_points_per_segment[label], None, criteria, 10, cv2.KMEANS_PP_CENTERS)
@@ -137,8 +173,23 @@ class AnnotationImage:
                 # If too few points for k-means, still include one
                 center_index = np.random.choice(len(segment_points)) 
                 all_points.append(segment_points[center_index])
+            print(f"""Segment {label} has {len(all_points)} points clusters""")
 
         centers = np.array(all_points, dtype=np.int32)
+        print(f"all points: {all_points}")
+        print(f"centers: {centers}")
+        print(centers.shape)
+
+        if debug_visualization:
+            plt.figure(figsize=(10,10))
+            plt.imshow(mask)
+            plt.imshow(skeleton, cmap='gray', alpha=0.5)
+            plt.scatter(centers[:, 1], centers[:, 0], c='r', s=100)
+            plt.axis('off')
+            plt.show()
+            #plt savefig
+            plt.savefig('skeleton_img.png')
+
         return centers
 
     def generate_visualization(self):
@@ -185,4 +236,13 @@ class AnnotationImage:
             if obj.mask is not None:
                 segmap[obj.mask > 0] = obj.scene_object_id
         return segmap
+
+if __name__ == "__main__":
+    image = cv2.imread('test_sceletonization.png')
+    #only use 1st channel
+    image = image[:,:,0]
+    print(image.shape)
+    AI = AnnotationImage(None, None)
+    AI.get_prompt_points_from_mask(image, debug_visualization=True)
+
 
