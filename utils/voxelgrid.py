@@ -29,16 +29,6 @@ class VoxelGrid:
         else:
             self.o3d_grid = None
 
-    def __init__(self):
-        self.width = None
-        self.height = None
-        self.depth = None
-        self.voxel_size = None
-        self.origin = None
-        self.color = None
-        self.o3d_grid_id = None
-        self.o3d_grid = None
-
     def save_voxelgrid(self, path):
         with open(path/"voxel_grid_width.pkl", "wb") as f:
             pickle.dump(self.width, f)
@@ -210,79 +200,85 @@ class VoxelGrid:
             print(f"correspondence time: {time.time()-start_time}")
         #for each position get majority vote
 
-        # print("majority voting")
-        # for position, votes in voxel_correspondences.items():
-        #     if len(votes) == 0:
-        #         continue
-        #     unique, counts = np.unique(votes, return_counts=True)
-
-        #     if len(unique) == 1:
-        #         majority_vote = unique[0]
-        #         voxel_correspondences[position] = majority_vote
-        #         continue
-
-        #     #sort unique and counts decreasing
-        #     sorted_idx = np.argsort(-counts)
-        #     unique = unique[sorted_idx]
-        #     counts = counts[sorted_idx]
-        #     majority_vote = unique[0] if counts[0]/counts[1] > 1.5 else 0
-        #     voxel_correspondences[position] = majority_vote
-        
-        def mode_filter(values):
-            """Calculates the mode (most frequent value) of a neighborhood."""
-            unique, counts = np.unique(values, return_counts=True)
-            if len(unique) == 1:
-                return unique[0]
-            sorted_idx = np.argsort(-counts)
-            unique = unique[sorted_idx]
-            counts = counts[sorted_idx]
-            if counts[0] / counts[1] > 1.5:
-                if unique[0] != 0:
-                    return unique[0]
-                elif counts[0] / sum(counts[1:]) > 7:
-                    return 0
-            return 256
-
-        print("majority voting with neighborhood analysis")
-
-        # Convert voxel_correspondences to a 3D grid for neighborhood filtering
-        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)), dtype=np.uint32)
-        print(voxel_grid.shape)
-        for position, vote in voxel_correspondences.items():
-            if len(vote) == 0:
-                continue
-            # set it to majority vote
-            voxel_grid[position] = max(set(vote), key=vote.count)
-
-        print("get_neighborhood_votes")
-        # Apply neighborhood analysis (3x3x3 window)
-        neighborhood_votes = generic_filter(voxel_grid, mode_filter, size=3, mode='constant', cval=0)
-
-        print("combine neighborhood votes with majority voting")
-
-        # Combine neighborhood votes with majority voting
+        print("majority voting")
         for position, votes in voxel_correspondences.items():
             if len(votes) == 0:
                 continue
-
             unique, counts = np.unique(votes, return_counts=True)
 
             if len(unique) == 1:
-                voxel_correspondences[position] = unique[0]
+                majority_vote = unique[0]
+                voxel_correspondences[position] = majority_vote
                 continue
 
+            #sort unique and counts decreasing
             sorted_idx = np.argsort(-counts)
             unique = unique[sorted_idx]
             counts = counts[sorted_idx]
+            majority_vote = unique[0] if counts[0]/counts[1] > 1.5 else 0
+            voxel_correspondences[position] = majority_vote
+        
+        # def mode_filter(values):
+        #     """Calculates the mode (most frequent value) of a neighborhood."""
+        #     unique, counts = np.unique(values, return_counts=True)
+        #     if len(unique) == 1:
+        #         return unique[0]
+        #     sorted_idx = np.argsort(-counts)
+        #     unique = unique[sorted_idx]
+        #     counts = counts[sorted_idx]
+        #     if counts[0] / counts[1] > 1.5:
+        #         if unique[0] != 0:
+        #             return unique[0]
+        #         elif counts[0] / sum(counts[1:]) > 7:
+        #             return 0
+        #     return 256
+        
 
-            neighborhood_vote = neighborhood_votes[position]
-            if neighborhood_vote != 256:
-                voxel_correspondences[position] = neighborhood_vote
-            elif counts[0] / counts[1] > 1.5:  # Consistent votes
-                voxel_correspondences[position] = unique[0]
-            else:
-                voxel_correspondences[position] = 0
-        print("generating colored voxel grid")
+        #z buffer
+        
+
+
+
+        # print("majority voting with neighborhood analysis")
+
+        # # Convert voxel_correspondences to a 3D grid for neighborhood filtering
+        # voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)), dtype=np.uint32)
+        # print(voxel_grid.shape)
+        # for position, vote in voxel_correspondences.items():
+        #     if len(vote) == 0:
+        #         continue
+        #     # set it to majority vote
+        #     voxel_grid[position] = max(set(vote), key=vote.count)
+
+        # print("get_neighborhood_votes")
+        # # Apply neighborhood analysis (3x3x3 window)
+        # neighborhood_votes = generic_filter(voxel_grid, mode_filter, size=3, mode='constant', cval=0)
+
+        # print("combine neighborhood votes with majority voting")
+
+        # # Combine neighborhood votes with majority voting
+        # for position, votes in voxel_correspondences.items():
+        #     if len(votes) == 0:
+        #         continue
+
+        #     unique, counts = np.unique(votes, return_counts=True)
+
+        #     if len(unique) == 1:
+        #         voxel_correspondences[position] = unique[0]
+        #         continue
+
+        #     sorted_idx = np.argsort(-counts)
+        #     unique = unique[sorted_idx]
+        #     counts = counts[sorted_idx]
+
+        #     neighborhood_vote = neighborhood_votes[position]
+        #     if neighborhood_vote != 256:
+        #         voxel_correspondences[position] = neighborhood_vote
+        #     elif counts[0] / counts[1] > 1.5:  # Consistent votes
+        #         voxel_correspondences[position] = unique[0]
+        #     else:
+        #         voxel_correspondences[position] = 0
+        # print("generating colored voxel grid")
 
         # copy voxel grid and color voxels according to majority vote
         colored_voxel_grid = deepcopy(self.o3d_grid)
