@@ -1,12 +1,9 @@
 import open3d as o3d
 import numpy as np
-import mcubes
 from copy import deepcopy
-import cv2
 import time
-from scipy.ndimage import generic_filter
-from scipy.stats import mode
 import pickle
+import cv2
 
 class VoxelGrid:
     def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None):
@@ -18,14 +15,7 @@ class VoxelGrid:
         self.color = color
         self.o3d_grid_id = None
         if width is not None and height is not None and depth is not None:
-            self.o3d_grid = o3d.geometry.VoxelGrid.create_dense(
-                origin=origin,
-                color=color,
-                voxel_size=voxel_size,
-                width=width,
-                height=height,
-                depth=depth
-            )
+            self.o3d_grid = self.generate_colored_voxelgrid(voxel_size, origin, height, width, depth)
         else:
             self.o3d_grid = None
 
@@ -166,11 +156,11 @@ class VoxelGrid:
             rgb = vis.capture_screen_float_buffer(True)
             vis.destroy_window()
 
-            # #show rgb image
-            # rgb_cv = (np.asarray(rgb)*255).astype(np.uint8)
-            # cv2.imshow("rgb", cv2.cvtColor(rgb_cv, cv2.COLOR_RGB2BGR))
-            # cv2.waitKey(0)
-            # cv2.destroyAllWindows()
+            #show rgb image
+            rgb_cv = (np.asarray(rgb)*255).astype(np.uint8)
+            cv2.imshow("rgb", cv2.cvtColor(rgb_cv, cv2.COLOR_RGB2BGR))
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
             print(f"projection time: {time.time()-start_time}")
 
@@ -313,46 +303,6 @@ class VoxelGrid:
         vis.run()
         vis.destroy_window()
 
-    def convert_voxel_grid_to_mesh(self):
-
-        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)))
-        print(voxel_grid.shape)
-        for voxel in self.o3d_grid.get_voxels():
-            voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 15
-        
-        vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
-        print(len(vertices), len(triangles))
-        print(vertices[0], triangles[0])
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(vertices)
-        mesh.triangles = o3d.utility.Vector3iVector(triangles)
-        o3d.visualization.draw_geometries([mesh])
-        print(f"mesh center: mesh.get_center()")
-
-        triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
-        triangle_clusters = np.asarray(triangle_clusters)
-        cluster_n_triangles = np.asarray(cluster_n_triangles)
-
-        # Get unique cluster labels and corresponding triangle counts
-        unique_labels = np.unique(triangle_clusters)
-        print(unique_labels)
-
-        # Create separate meshes for each cluster
-        separate_meshes = []
-        for label in unique_labels:
-            # Filter triangles belonging to the current cluster
-            cluster_triangles = np.where(triangle_clusters == label)[0]
-            if len(cluster_triangles) < 100:
-                continue
-            mesh_cluster = o3d.geometry.TriangleMesh(
-                vertices=mesh.vertices,
-                triangles=o3d.utility.Vector3iVector(
-                    np.asarray(mesh.triangles)[cluster_triangles]
-                ),
-            )
-            separate_meshes.append(mesh_cluster)
-        self.visualize_colored_meshes(separate_meshes)
-
     def project_voxelgrid(self, img_width, img_height, intrinsics, cam_pose=None, voxelgrid=None):
 
         # vis = o3d.visualization.Visualizer()
@@ -388,3 +338,53 @@ class VoxelGrid:
         # cv2.destroyAllWindows()
 
         return img
+    
+    def generate_colored_voxelgrid(self, voxel_size, origin, height, width, depth):
+        """
+        Optimized version: Creates a voxel grid from a point cloud where each point represents a voxel.
+        The point's color encodes its voxel index.
+
+        Args:
+            voxel_size: The size of each voxel.
+            origin: The origin of the voxel grid.
+            height, width, depth: The dimensions of the voxel grid in meters.
+
+        Returns:
+            An Open3D voxel grid.
+        """
+
+        # Round dimensions to the next multiple of voxel_size
+        self.height = np.ceil(height / voxel_size) * voxel_size
+        self.width = np.ceil(width / voxel_size) * voxel_size
+        self.depth = np.ceil(depth / voxel_size) * voxel_size
+
+        # Calculate number of voxels along each dimension
+        num_voxels_height = int(self.height / voxel_size)
+        num_voxels_width = int(self.width / voxel_size)
+        num_voxels_depth = int(self.depth / voxel_size)
+
+        # Calculate voxel grid bounds
+        min_bound = origin 
+
+        # Create grid of indices using NumPy's meshgrid
+        i, j, k = np.mgrid[:num_voxels_height, :num_voxels_width, :num_voxels_depth]
+
+        # Calculate point positions using vectorized operations
+        points = min_bound + np.stack([i, j, k], axis=-1) * voxel_size
+        points = points.reshape(-1, 3)  # Flatten into a list of points
+
+        # Calculate colors using vectorized operations and normalize
+        colors = np.stack([i, j, k], axis=-1) / np.array([num_voxels_height, num_voxels_width, num_voxels_depth])
+        colors = colors.reshape(-1, 3)  # Flatten into a list of colors
+
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
+        pcd.colors = o3d.utility.Vector3dVector(colors)  
+
+
+        voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)  
+        for voxel in voxel_grid.get_voxels():
+            inx = np.round((voxel.color*np.array([num_voxels_height, num_voxels_width, num_voxels_depth])),0).astype(np.int32)
+            if not (inx[0] == voxel.grid_index[0] and inx[1] == voxel.grid_index[1] and inx[2] == voxel.grid_index[2]):
+                print(inx, voxel.grid_index)
+        return voxel_grid
