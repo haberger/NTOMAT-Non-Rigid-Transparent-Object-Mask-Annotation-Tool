@@ -7,6 +7,7 @@ from utils.annotationimage import AnnotationImage
 from utils.voxelgrid import VoxelGrid
 import utils.vis_masks as vis_masks
 import pickle
+import time
 
 class AnnotationScene:
     def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
@@ -226,6 +227,7 @@ class AnnotationScene:
         depth = max_distance * 1.5
         print(width, height, depth)
 
+        start_time = time.time()
         self.voxel_grid = VoxelGrid(
             width=width,
             height=height,
@@ -234,7 +236,7 @@ class AnnotationScene:
             origin=np.array([self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2]).astype(np.float64),
             color=np.array([0.2, 0.2, 0.2]).astype(np.float64)
         )
-
+        print(f"Execution time: {time.time() - start_time:.2f} seconds")
         #visualize voxel grid
         # o3d.visualization.draw_geometries([self.voxel_grid])
 
@@ -267,12 +269,6 @@ class AnnotationScene:
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=False)
             relevant_points += [voxel.grid_index for voxel in mask_grid.get_voxels()]
             print(mask_grid)
-
-        for voxel in self.voxel_grid.o3d_grid.get_voxels(): #TODO why not use clear()?
-            self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
-        for pos in relevant_points:
-            new_voxel = o3d.geometry.Voxel(pos, [pos[0]/(width/voxel_size), pos[1]/(height/voxel_size), pos[2]/(depth/voxel_size)])
-            self.voxel_grid.o3d_grid.add_voxel(new_voxel)
 
         for pose in camera_poses:
             pose = pose.tf

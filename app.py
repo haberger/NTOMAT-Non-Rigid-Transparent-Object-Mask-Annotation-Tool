@@ -26,11 +26,12 @@ function getMousePosition(e, image) {
 }
 
 function handleMouseClick(e) {
+    console.log(e.target.offsetParent.offsetParent.id);
     const targetImage = e.target;
     const offsetParentId = "prompting_image"; // ID of the target image's offsetParent div
 
-    if (targetImage.tagName !== 'IMG' || targetImage.offsetParent.id !== offsetParentId) return;
-
+    if (targetImage.tagName !== 'IMG' || (targetImage.offsetParent.id !== offsetParentId && targetImage.offsetParent.offsetParent.id !== offsetParentId)) return;
+    console.log("Image clicked");
     var image = e.target;
     var { x, y } = getMousePosition(e, image);
 
@@ -218,7 +219,7 @@ def instanciate_voxel_grid():
         elem_classes="images", 
         visible=False)
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
-    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.008)
+    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.01)
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
     image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     #save image 
@@ -256,7 +257,7 @@ def manual_annotation_done():
     active_scene = dataset.active_scene
 
     #write dataset to pickle into debug_data_promptgeneration
-    active_scene.scene_to_pickle("debug_data_promptgeneration")
+    # active_scene.scene_to_pickle("debug_data_promptgeneration")
 
     active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
 
