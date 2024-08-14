@@ -1,37 +1,84 @@
-import open3d as o3d
+
+import time
 import numpy as np
-from utils.vis_masks import SceneFileReader
-from pathlib import Path
+import open3d as o3d
 
-DATASET_PATH = Path('../depth-estimation-of-transparent-objects')
 
-scene_id = 'j_005'
+import numpy as np
+import open3d as o3d
+import time
 
-scene = SceneFileReader.create(DATASET_PATH / 'config.cfg')
-intrinsic = scene.get_camera_info_scene(scene_id)
-objects = scene.get_object_poses(scene_id)
-oriented_models = scene.load_object_models(scene_id)
-camera_poses = scene.get_camera_poses(scene_id)
-camera_info = scene.get_camera_info_scene(scene_id)
+def pointcloud_to_voxelgrid_optimized(voxel_size, center, height, width, depth):
+    """
+    Optimized version: Creates a voxel grid from a point cloud where each point represents a voxel.
+    The point's color encodes its voxel index.
 
-camera_pose = camera_poses[0].tf
-print(camera_pose)
+    Args:
+        voxel_size: The size of each voxel.
+        center: The center of the voxel grid.
+        height, width, depth: The dimensions of the voxel grid in meters.
 
-vis = o3d.visualization.Visualizer()
-vis.create_window()
+    Returns:
+        An Open3D voxel grid.
+    """
+    
+    start_time = time.time()
 
-opt = vis.get_render_option()
-opt.mesh_show_back_face = True
+    # Calculate number of voxels along each dimension
+    num_voxels_height = int(np.ceil(height / voxel_size))
+    num_voxels_width = int(np.ceil(width / voxel_size))
+    num_voxels_depth = int(np.ceil(depth / voxel_size))
+    print(f"Step 1 (Calculate number of voxels): {time.time() - start_time:.4f} seconds")
 
-for model in oriented_models:
-    open3d_model = model.as_open3d
-    open3d_model.paint_uniform_color(np.random.rand(3,))
-    vis.add_geometry(open3d_model)
+    # Calculate voxel grid bounds (adjusting for potential rounding in num_voxels)
+    step_time = time.time()
+    half_height = num_voxels_height * voxel_size / 2
+    half_width = num_voxels_width * voxel_size / 2
+    half_depth = num_voxels_depth * voxel_size / 2
+    min_bound = center - np.array([half_width, half_height, half_depth])
+    print(f"Step 2 (Calculate voxel grid bounds): {time.time() - step_time:.4f} seconds")
 
-ctr = vis.get_view_control()
-cam_view = ctr.convert_to_pinhole_camera_parameters()
-cam_view.extrinsic = np.linalg.inv(camera_pose)
-cam_view.intrinsic = camera_info.as_o3d()
-ctr.convert_from_pinhole_camera_parameters(cam_view, True)
-vis.run()
-vis.destroy_window()
+    # Create grid of indices using NumPy's meshgrid
+    step_time = time.time()
+    i, j, k = np.mgrid[:num_voxels_height, :num_voxels_width, :num_voxels_depth]
+    print(f"Step 3 (Create grid of indices): {time.time() - step_time:.4f} seconds")
+
+    # Calculate point positions using vectorized operations
+    step_time = time.time()
+    points = min_bound + np.stack([j, i, k], axis=-1) * voxel_size
+    points = points.reshape(-1, 3)  # Flatten into a list of points
+    print(f"Step 4 (Calculate point positions): {time.time() - step_time:.4f} seconds")
+
+    # Calculate colors using vectorized operations and normalize
+    step_time = time.time()
+    colors = np.stack([i, j, k], axis=-1) / np.array([num_voxels_height, num_voxels_width, num_voxels_depth])
+    colors = colors.reshape(-1, 3)  # Flatten into a list of colors
+    print(f"Step 5 (Calculate colors): {time.time() - step_time:.4f} seconds")
+
+    # Create point cloud
+    step_time = time.time()
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    print(f"Step 6 (Create point cloud): {time.time() - step_time:.4f} seconds")
+
+    # Create voxel grid from point cloud
+    step_time = time.time()
+    voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
+    print(f"Step 7 (Create voxel grid): {time.time() - step_time:.4f} seconds")
+
+    total_time = time.time() - start_time
+    print(f"Total time: {total_time:.4f} seconds")
+
+    return voxel_grid
+
+# Example usage (adjusting height, width, depth to meters)
+voxel_size = 0.0025
+center = np.array([0.5, 0.5, 0.5])
+height, width, depth = 1.0, 1.0, 1.0  # In meters
+print("instanciate grid")
+start_time = time.time()
+voxel_grid = pointcloud_to_voxelgrid_optimized(voxel_size, center, height, width, depth)
+print(f"Execution time: {time.time() - start_time:.2f} seconds")
+# Visualize the voxel grid (optional)
+o3d.visualization.draw_geometries([voxel_grid])
