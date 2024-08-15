@@ -214,6 +214,7 @@ class AnnotationScene:
 
         #TODO maybe add warning if obejcts are further away from the poi than 0.5m
 
+        start_time = time.time()
         camera_poses = [image.camera_pose for image in self.annotation_images.values()]
 
         # get largest distance between cameras and ray intersection
@@ -226,6 +227,7 @@ class AnnotationScene:
         height = max_distance * 1.5
         depth = max_distance * 1.5
         print(width, height, depth)
+        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
 
         start_time = time.time()
         self.voxel_grid = VoxelGrid(
@@ -236,9 +238,7 @@ class AnnotationScene:
             origin=np.array([self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2]).astype(np.float64),
             color=np.array([0.2, 0.2, 0.2]).astype(np.float64)
         )
-        print(f"Execution time: {time.time() - start_time:.2f} seconds")
-        #visualize voxel grid
-        # o3d.visualization.draw_geometries([self.voxel_grid])
+        print(f"Time taken for voxel grid creation: {time.time() - start_time:.2f} seconds")
 
         print("prefiltering")
 
@@ -254,6 +254,7 @@ class AnnotationScene:
         images = [image for image in self.annotation_images.values() if image.annotation_accepted]
         camera_poses = [image.camera_pose for image in images]
 
+        start_time = time.time()
         relevant_points = []
         for pose in camera_poses:
             pose = pose.tf
@@ -269,7 +270,9 @@ class AnnotationScene:
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=False)
             relevant_points += [voxel.grid_index for voxel in mask_grid.get_voxels()]
             print(mask_grid)
+        print(f"Time taken for first loop over camera poses: {time.time() - start_time:.2f} seconds")
 
+        start_time = time.time()
         for pose in camera_poses:
             pose = pose.tf
             mask_grid = deepcopy(self.voxel_grid.o3d_grid)
@@ -282,12 +285,17 @@ class AnnotationScene:
             cam.intrinsic = intrinsic
             cam.extrinsic = extrinsic
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
+        print(f"Time taken for second loop over camera poses: {time.time() - start_time:.2f} seconds")
 
+        start_time = time.time()
         for voxel in mask_grid.get_voxels():
             self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
+        print(f"Time taken for loop over voxels: {time.time() - start_time:.2f} seconds")
 
+        start_time = time.time()
         for image in images:
             self.carve_silhouette(image, keep_voxels_outside_image=True)
+        print(f"Time taken for loop over images: {time.time() - start_time:.2f} seconds")
 
     def get_cameras_point_of_interest(self, debug_vizualization=False):
         '''adepted from https://math.stackexchange.com/questions/4865611/intersection-closest-point-of-multiple-rays-in-3d-space'''

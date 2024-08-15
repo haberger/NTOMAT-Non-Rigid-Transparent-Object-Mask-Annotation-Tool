@@ -60,14 +60,10 @@ class AnnotationImage:
         takes an annotation object and generates prompts for it
         '''
 
-        #1. generate mask from voxelgrid
-        # -> get new segmentation map from voxelgrid (use offscreen rednerer project to pose)
         voxelgrid = scene.voxel_grid
         voxelgrid_segmap = voxelgrid.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, self.camera_pose, voxelgrid.o3d_grid_id)
         voxelgrid_segmap = voxelgrid_segmap[:,:,0]
-        #TODO add annotation_objects to scene_ids-> assign scene ids
 
-        #2. for every object in annotation object
 
         print("generating prompts")
 
@@ -77,118 +73,112 @@ class AnnotationImage:
                 continue
             mask = np.zeros_like(voxelgrid_segmap)
             mask[voxelgrid_segmap == obj.scene_object_id] = 255
-
-            #show mask
-            cv2.imshow('mask', mask.astype(np.uint8))
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
             
             #3. generate prompts
-            prompt_points = self.get_prompt_points_from_mask(mask)
-
-            # visualize prompt point on rgb image
-            img = cv2.imread(self.rgb_path)
-            for point in prompt_points:
-                cv2.circle(img, (point[1], point[0]), 3, (0, 255, 0), -1)
-            cv2.imshow('prompt_points', img)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
-
-
-            for point in prompt_points:
-                self.active_object = obj
-                self.add_prompt([[point[1], point[0]]], [1], predictor)
+            prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True)
+            if prompt_points is not None:
+                for point in prompt_points:
+                    self.active_object = obj
+                    self.add_prompt([[point[1], point[0]]], [1], predictor)
 
             for scene_object_id in scene.scene_object_ids:
                 if scene_object_id != obj.scene_object_id:
                     mask = np.zeros_like(voxelgrid_segmap)
                     mask[voxelgrid_segmap == scene_object_id] = 255
+                    if np.sum(mask) == 0:
+                        continue
 
-                    prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True)
-                    for point in prompt_points:
-                        self.active_object = obj
-                        self.add_prompt([[point[1], point[0]]], [0], predictor)
-        print("prompts generated")
-        # -> get mask from segmentation map
-        # -> generate positive prompts using get_prompt_points_from_mask
-        # -> generate negative prompts using get_prompt_points_from_mask for all other objects
+                    prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True, just_one_point=True)
+                    if prompt_points is not None:
+                        for point in prompt_points:
+                            self.active_object = obj
+                            self.add_prompt([[point[1], point[0]]], [0], predictor)
 
-        # 3. for each prompt
-        # -> add prompt to annotation object using add_prompt
+    def erode_with_minimum_points(self, mask, kernel, iterations, min_points_ratio):
+        initial_size = np.count_nonzero(mask)
+        min_points = int(min_points_ratio * initial_size)
 
-        #TODO on write update obejcts.library
-        img = self.generate_visualization()
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        cv2.imshow('auto_prompts', img)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-        pass
+        for _ in range(iterations):
+            eroded_mask = cv2.erode(mask, kernel)
+            if np.count_nonzero(eroded_mask) < min_points:
+                return mask  # Return the original mask before erosion
+            mask = eroded_mask
 
-    def get_prompt_points_from_mask(self, mask, debug_visualization=False):
-        # show mask
-        print(mask.dtype)
-        print(type(mask))
-        print(np.min(mask))
-        print(np.max(mask))
-        cv2.imshow('mask', mask)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        return mask
 
+    def get_prompt_points_from_mask(self, mask, debug_visualization=True, just_one_point=False):
 
-        skeleton = cv2.ximgproc.thinning(mask)
+        # for every connected component erode it until it has 10% of its original size
+        all_points = []
+        skeleton = np.zeros_like(mask)
 
-        #show skeleton
-        cv2.imshow('skeleton', skeleton.astype(np.uint8))
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-        num_labels, labels = cv2.connectedComponents(skeleton)
-        num_points_per_segment = 1
-
-        #get num of points in each segment
-        points = np.unique(labels, return_counts=True)[1]
-        num_points_per_segment = np.maximum(np.ceil(points / 300), 1).astype(np.int32)
-
-        all_points = []  
-        for label in range(1, num_labels):  # Start at 1 to skip the background label (0)
-            segment_mask = (labels == label).astype(np.uint8)
+        if just_one_point:
+            segment_points = np.argwhere(mask > 0)
+            segment_points = segment_points.reshape(-1, 2)
+            initial_size = len(segment_points)
+            segment_mask = mask
+            segment_mask = self.erode_with_minimum_points(
+                segment_mask, np.ones((3, 3), np.uint8), 1000, 0.1
+            )
             segment_points = np.argwhere(segment_mask > 0)
             segment_points = segment_points.reshape(-1, 2)
-            print(f"""Segment {label} has {len(segment_points)} points""")
-            print(num_points_per_segment[label])
-            print(segment_points.shape)
-
-            if len(segment_points) > num_points_per_segment[label]:
-                # Perform k-means
+            skeleton += segment_mask
+            if len(segment_points) > 0:
                 criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-                _, _, centers = cv2.kmeans(segment_points.astype(np.float32), num_points_per_segment[label], None, criteria, 10, cv2.KMEANS_PP_CENTERS)
+                _, _, centers = cv2.kmeans(segment_points.astype(np.float32), 1, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
+                if len(centers[0]) == 2:
+                    all_points.extend(centers)
+                else:
+                    print(f"Warning: Could not find 2 points for segment for single prompt {centers}")
+        else:
+            num_labels, labels = cv2.connectedComponents(mask)
+            for label in range(1, num_labels):  # Start at 1 to skip the background label (0)
+                segment_mask = (labels == label).astype(np.uint8)
+                segment_points = np.argwhere(segment_mask > 0)
+                segment_points = segment_points.reshape(-1, 2)
+                initial_size = len(segment_points)
+                if initial_size < 10:
+                    continue
 
-                # Snap centers to nearest skeleton points (corrected)
-                distances = cdist(centers, segment_points)
-                closest_point_indices = np.argmin(distances, axis=1)  # Find closest for EACH center
-                snapped_centers = segment_points[closest_point_indices]
-                all_points.extend(snapped_centers)
+                points = np.unique(labels, return_counts=True)[1]
+                num_points_per_segment = np.maximum(np.ceil(points / 3000), 1).astype(np.int32)
 
-            elif len(segment_points) > 0:
-                # If too few points for k-means, still include one
-                center_index = np.random.choice(len(segment_points)) 
-                all_points.append(segment_points[center_index])
-            print(f"""Segment {label} has {len(all_points)} points clusters""")
+                if len(segment_points) > 0:
+                    segment_mask = self.erode_with_minimum_points(
+                        segment_mask, np.ones((3, 3), np.uint8), 1000, 0.1
+                    )
+                    segment_points = np.argwhere(segment_mask > 0)
+                    segment_points = segment_points.reshape(-1, 2)
+                    skeleton += segment_mask
+                    if len(segment_points) > num_points_per_segment[label]:
+                        # Perform k-means
+                        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+                        _, _, centers = cv2.kmeans(segment_points.astype(np.float32), num_points_per_segment[label], None, criteria, 10, cv2.KMEANS_PP_CENTERS)
 
+                        # Snap centers to nearest skeleton points (corrected)
+                        distances = cdist(centers, segment_points)
+                        closest_point_indices = np.argmin(distances, axis=1)
+                        snapped_centers = segment_points[closest_point_indices]
+                        for center in snapped_centers:
+                            if len(center) == 2:
+                                all_points.append(center)
+                            else:
+                                print(f"Warning: Could not find 2 points for segment {label} for multiple prompts {center}")
         centers = np.array(all_points, dtype=np.int32)
-        print(f"all points: {all_points}")
-        print(f"centers: {centers}")
-        print(centers.shape)
-
-        if debug_visualization:
-            plt.figure(figsize=(10,10))
-            plt.imshow(mask)
-            plt.imshow(skeleton, cmap='gray', alpha=0.5)
-            plt.scatter(centers[:, 1], centers[:, 0], c='r', s=100)
-            plt.axis('off')
-            plt.show()
-            #plt savefig
-            plt.savefig('skeleton_img.png')
+            
+        # if debug_visualization:
+        #     print("WTF")
+        #     plt.figure(figsize=(10,10))
+        #     plt.imshow(mask)
+        #     plt.imshow(skeleton, cmap='gray', alpha=0.5)
+        #     plt.scatter(centers[:, 1], centers[:, 0], c='r', s=10)
+        #     plt.axis('off')
+        #     plt.show()
+        #     #plt savefig
+        #     # plt.savefig('skeleton_img.png')
+        print("centers", centers)
+        if len(centers) == 0:
+            return None
 
         return centers
 

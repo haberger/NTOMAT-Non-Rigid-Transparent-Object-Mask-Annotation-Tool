@@ -219,7 +219,7 @@ def instanciate_voxel_grid():
         elem_classes="images", 
         visible=False)
     yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
-    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.01)
+    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.005)
     yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
     image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
     #save image 
@@ -268,7 +268,6 @@ def manual_annotation_done():
         rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
         predictor.set_image(rgb)
         image.generate_auto_prompts(active_scene, predictor)
-        break
 
 def update_object_library(id_tb, name_tb, description_tb, obj_library_df):
     global dataset
