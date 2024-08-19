@@ -3,7 +3,7 @@ import open3d as o3d
 from copy import deepcopy
 from pathlib import Path
 import cv2
-from utils.annotationimage import AnnotationImage
+from utils.annotationimage import AnnotationImage, AnnotationObject
 from utils.voxelgrid import VoxelGrid
 import utils.vis_masks as vis_masks
 import pickle
@@ -83,6 +83,25 @@ class AnnotationScene:
         
         self.voxel_grid = VoxelGrid()
         self.voxel_grid.load_voxelgrid(path)
+
+    def add_object(self, object_name, object_dataset_id):
+        radio_options = [obj.label for obj in self.active_image.annotation_objects.values()]
+
+        i=0
+        object_name = f"{object_name}_{i}"
+        while object_name in radio_options:
+            i+=1
+            object_name = f"{object_name.rpartition('_')[0]}_{i}"
+
+        scene_object_id = max(self.scene_object_ids)+1
+
+        for anno_image in self.annotation_images.values():
+
+            annotation_object = AnnotationObject([], [], None, None, object_name, object_dataset_id, scene_object_id)
+            anno_image.active_object = annotation_object #TODO check if this handles corrrectly if i change image in the middle of the annotation process
+            anno_image.annotation_objects[annotation_object.label] = annotation_object
+        
+
 
     def get_object_metadata(self):
         objects_data = self.scene_reader.get_object_poses(self.scene_id)

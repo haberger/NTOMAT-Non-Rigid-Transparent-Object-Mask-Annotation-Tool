@@ -224,6 +224,13 @@ class AnnotationImage:
         image = cv2.imread(self.rgb_path)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
+        if self.active_object is None:
+            return image
+        
+        # if masks of all objects are None, return the original image
+        if all(obj.mask is None for obj in self.annotation_objects.values()):
+            return image
+
         overlay = image.copy()
 
         light_blue = (73, 116, 130)

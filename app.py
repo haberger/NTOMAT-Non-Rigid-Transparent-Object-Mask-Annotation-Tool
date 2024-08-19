@@ -50,34 +50,6 @@ document.addEventListener('contextmenu', handleContextMenu, false);
 </script>
 """
 
-def change_image(img_selection):
-    global dataset
-    global predictor
-    print("Image Changed")
-    start_time = time.time()    
-
-    if img_selection is None:
-        return None
-
-    scene = dataset.active_scene
-
-    if scene.active_image is not None:
-        #TODO handle saving of prompter
-        pass
-
-    # check if annotations already exist
-    scene.active_image = scene.annotation_images[img_selection]
-
-    if scene.active_image.annotation_objects:
-        image = scene.active_image.generate_visualization()
-    else:
-        image = cv2.cvtColor(cv2.imread(scene.active_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
-
-    predictor.set_image(image)
-    print(f"Image changed in {time.time() - start_time:.2f} seconds")
-
-    return image
-
 def next_image(img_selection):
     global dataset
     global predictor
@@ -128,44 +100,6 @@ def js_trigger(input_data, image, annotation_objects_selection, eraser):
 
     image = active_image.generate_visualization()
     return  -1, image
-
-def add_object(object_name, image): #TODO maybe use ID instead of name
-    global dataset
-    global predictor
-
-    active_scene = dataset.active_scene
-    radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
-
-    i=0
-    object_name = f"{object_name}_{i}"
-    while object_name in radio_options:
-        i+=1
-        object_name = f"{object_name.rpartition('_')[0]}_{i}"
-
-    dataset_object_id = dataset.object_library[dataset.object_library['name'] == object_name.rpartition("_")[0]]['id'].values[0]
-    scene_object_id = max(active_scene.scene_object_ids)+1
-
-    for anno_image in active_scene.annotation_images.values():
-
-
-        annotation_object = AnnotationObject([], [], None, None, object_name, dataset_object_id, scene_object_id)
-
-        anno_image.active_object = annotation_object
-        anno_image.annotation_objects[annotation_object.label] = annotation_object
-
-    for obj in active_scene.active_image.annotation_objects.values():
-        if obj.mask is not None:
-            image = active_scene.active_image.generate_visualization()
-    radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
-        
-    if len(radio_options) > 0:
-        default_value = radio_options[-1]
-    else:
-        default_value = None
-
-    radio_buttons = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", choices=radio_options, visible=True, interactive=True, value=default_value)
-
-    return None, radio_buttons, image
 
 def change_annotation_object(annotation_objects_selection):
     global dataset
@@ -258,30 +192,59 @@ def manual_annotation_done():
         scale=3)
     return eraser_checkbox
 
-def change_to_prompting_view():
+def load_predictor(checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     """
-    Change the view to the prompting view, handles visibility of the different Components after the object library has been accepted
+    Load the predictor model, sets it to the global variable predictor
+
+    Parameters
+    ----------
+    checkpoint_path : str, optional
+        path to the model checkpoints, by default "model_checkpoints/sam_vit_h_4b8939.pth"
+    model_type : str, optional
+        model type, by default "vit_h"
+    device : str, optional
+        device to run the model with, by default "cuda"
+    """
+    global predictor
+
+    sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
+    sam.to(device=device)
+
+    predictor = SamPredictor(sam)
+
+def accept_object_library(obj_library_df):
+    """
+    Transitions the application to the prompting view. This function is called after the object library has been accepted.
 
     Returns
     -------
     string
-        status_md with the new status message
+        The updated status message to be displayed in the status Markdown component.
+
     gr.Column
-        object_library_menu_col with visible=False
+        The object_library_menu_col component with its visibility set to False. This hides the object library menu.
+
     gr.Column
-        prompting_image with_col visible=True
+        The prompting_image_with_col component with its visibility set to True. This shows the image that the user will be prompted to annotate.
+
     gr.Column
-        annotation_menu with_col visible=True
+        The annotation_menu_with_col component with its visibility set to True. This shows the menu for annotation options.
+
     gr.Row
-        scene_navigation_menu_row with visible=True
+        The scene_navigation_menu_row component with its visibility set to True. This shows the navigation menu for moving through different scenes.
+    
+    gr.Dropdown
+        The annotation_object_dropdown component with the object classes to select from.
     """
+    dataset_objects = [f"{obj['name']} - {obj['id']}" for _, obj in obj_library_df.iterrows()]
 
     return (
         "### Select a Scene",
         gr.Column(visible=False),
         gr.Column(scale=8, visible=True),
         gr.Column(scale=2, visible=True),
-        gr.Row(visible=True)
+        gr.Row(visible=True),
+        gr.Dropdown(choices=dataset_objects, label="Objects you want to annotate", visible=True)
     )
 
 def update_object_library(id, object_name, object_description, obj_library_df):
@@ -303,24 +266,17 @@ def update_object_library(id, object_name, object_description, obj_library_df):
     -------
     pd.DataFrame
         The updated object library dataframe
-    gr.Dropdown
-        A dropdown with the object classes to select from
     """
 
 
     global dataset
-    global predictor
-
-    return_objs = [
-        obj_library_df, 
-        gr.Dropdown(choices=list(obj_library_df['name']), label="Object you want to annotate")]
 
     if id in obj_library_df['id'].values:
         gr.Warning("ID already exists", duration=3)
-        return return_objs
+        return obj_library_df
     elif id in [None, ""] or object_name in [None, ""] or object_description in [None, ""]:
         gr.Warning("Please fill all textboxes", duration=3)
-        return return_objs
+        return obj_library_df
 
     new_row = pd.DataFrame({
         "id": id, 
@@ -354,7 +310,6 @@ def load_scene(scene_id):
         annotation_objects_selection radio buttons to select the object to annotate
     """
     global dataset
-    global predictor
 
     annotation_objects_selection = gr.Radio(label="Select Object")
 
@@ -393,39 +348,118 @@ def load_scene(scene_id):
     scene.active_image = scene.annotation_images[default_img]
 
     radio_options = [obj.label for obj in scene.active_image.annotation_objects.values()]
+
     if len(radio_options) > 0:
         default_value = radio_options[-1]
     else:
         default_value = None
-    annotation_selection = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
+    annotation_objects_selection = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
 
     yield (
         f"Select object to annotate",
         img_selection,
-        annotation_selection)
+        annotation_objects_selection)
 
+def change_image(img_selection, object_selection):
+    """
+    Change the image to the selected image, load it into the predictor and return the image visualization
 
-def main(dataset_path):
+    Parameters
+    ----------
+    img_selection : str
+        The selected image to load provided by the img_selection dropdown
+    object_selection : str
+        The selected object to load to set as active object provided by the annotation_objects_selection radio buttons
+
+    Returns
+    -------
+    np.ndarray
+        The image visualization showing existing prompts and annotations
+    """
+
+    global dataset
+    global predictor 
+
+    if img_selection is None:
+        return None
+
+    prompt_image = dataset.active_scene.annotation_images[img_selection]
+    dataset.active_scene.active_image = prompt_image
+
+    image = cv2.cvtColor(cv2.imread(prompt_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    predictor.set_image(image)
+
+    if object_selection is not None:
+        prompt_image.active_object = prompt_image.annotation_objects[object_selection]
+
+    return prompt_image.generate_visualization()
+
+def add_object(object_name):
+    """
+    Add an object to the active image
+
+    Parameters
+    ----------
+    object_name : str
+        in the fromat "object_name - object_id" provided by the annotation_objects_selection radio buttons
+
+    Returns
+    -------
+    gr.Radio
+        The updated annotation_objects_selection radio buttons
+    """
+    global dataset
+
+    active_scene = dataset.active_scene
+
+    object_name, object_dataset_id = object_name.split(" - ")
+    active_scene.add_object(object_name, object_dataset_id)
+
+    radio_options = [obj.label for obj in active_scene.active_image.annotation_objects.values()]
+        
+    default_value = radio_options[-1] if radio_options else None
+
+    radio_buttons = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
+
+    return radio_buttons
+
+def change_annotation_object(annotation_objects_selection):
+    """
+    Change the active object to the selected object, and return the image visualization
+
+    Parameters
+    ----------
+    annotation_objects_selection : str
+        The selected object to load to set as active object provided by the annotation_objects_selection radio buttons
+
+    Returns
+    -------
+    np.ndarray
+        The image visualization showing existing prompts and annotations
+    """
+    global dataset
+
+    if annotation_objects_selection is None:
+        return None
+    prompt_image = dataset.active_scene.active_image
+
+    prompt_image.active_object = prompt_image.annotation_objects[annotation_objects_selection]
+
+    image = prompt_image.generate_visualization()
+
+    return image
+
+def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     global dataset
     global predictor
 
     dataset = AnnotationDataset(dataset_path)
-
-    sam_checkpoint = "model_checkpoints/sam_vit_h_4b8939.pth"
-    model_type = "vit_h"
-
-    device = "cuda"
-
-    sam = sam_model_registry[model_type](checkpoint=sam_checkpoint)
-    sam.to(device=device)
-
-    predictor = SamPredictor(sam)
+    load_predictor(checkpoint_path, model_type, device)
 
     with gr.Blocks(head=js_events, fill_height=True) as demo:
         status_md = gr.Markdown(
             "### Add all objects classes to the object library first, "
             "click \"Accept object library\" to continue")
-        # prompting_state = gr.State()
 
         js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
 
@@ -461,7 +495,7 @@ def main(dataset_path):
                 
             with gr.Column(scale=2, visible=False) as annotation_menu_col:
                 annotation_object_dropdown = gr.Dropdown(
-                    choices = list(dataset.object_library['name']),
+                    choices = [],
                     label="Object you want to annotate")
                 
                 annotation_objects_selection = gr.Radio(label="Select Object")
@@ -478,19 +512,21 @@ def main(dataset_path):
                 manual_annotation_done_btn = gr.Button("Manual Annotation Done")
                 eraser_checkbox = gr.Checkbox(label="erase prompts")
                 
+        add_object_to_library_btn.click(
+            update_object_library, 
+            [id_tb, name_tb, description_tb, obj_library_df], 
+            [obj_library_df])
+
         accept_object_library_btn.click(
-            change_to_prompting_view,
+            accept_object_library,
+            inputs=[obj_library_df],
             outputs=[
                 status_md, 
                 object_library_menu_col, 
                 prompting_image_col, 
                 annotation_menu_col, 
-                scene_navigation_menu_row])
-        
-        add_object_to_library_btn.click(
-            update_object_library, 
-            [id_tb, name_tb, description_tb, obj_library_df], 
-            [obj_library_df])
+                scene_navigation_menu_row, 
+                annotation_object_dropdown])
 
         scene_selection.change(
             load_scene, 
@@ -499,19 +535,24 @@ def main(dataset_path):
         
         img_selection.change(
             change_image, 
-            inputs=[img_selection], 
+            inputs=[img_selection, annotation_objects_selection], 
             outputs=[prompting_image])
-        prompting_image.select(
-            click_image, 
-            [prompting_image])
+        
         annotation_object_dropdown.select(
             add_object, 
-            [annotation_object_dropdown, prompting_image], 
-            [annotation_object_dropdown, annotation_objects_selection, prompting_image])
+            [annotation_object_dropdown], 
+            [annotation_objects_selection])
+        
         annotation_objects_selection.change(
             change_annotation_object, 
             [annotation_objects_selection], 
             [prompting_image])
+        
+        prompting_image.select(
+            click_image, 
+            [prompting_image])
+        
+
         js_parser.input(
             js_trigger, 
             [js_parser, prompting_image, annotation_objects_selection, eraser_checkbox], 
