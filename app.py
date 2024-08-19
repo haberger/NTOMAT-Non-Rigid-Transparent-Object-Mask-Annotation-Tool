@@ -548,18 +548,18 @@ def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth",
             [annotation_objects_selection], 
             [prompting_image])
         
+
+        #TODO
+
         prompting_image.select(
             click_image, 
             [prompting_image])
         
-
         js_parser.input(
             js_trigger, 
             [js_parser, prompting_image, annotation_objects_selection, eraser_checkbox], 
             [js_parser, prompting_image])
-        seen_all_objects_btn.click(
-            instanciate_voxel_grid,
-            outputs=[seen_all_objects_btn, status_md, voxel_image])
+        
         accept_annotation_btn.click(
             accept_annotation, 
             [voxel_image, gr.State(True), img_selection], 
@@ -568,9 +568,27 @@ def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth",
             accept_annotation, 
             [voxel_image, gr.State(False), img_selection], 
             [voxel_image, img_selection])
-        manual_annotation_done_btn.click(manual_annotation_done, outputs=[eraser_checkbox])
+
+        seen_all_objects_btn.click(
+            instanciate_voxel_grid,
+            outputs=[seen_all_objects_btn, status_md, voxel_image])
+
         show_grid_btn.click(show_voxel_grid)
+
         next_img_btn.click(next_image, [img_selection], [img_selection])
+        
+        manual_annotation_done_btn.click(manual_annotation_done, outputs=[eraser_checkbox])
+
+        
+        #TODO add a undo button, 
+        # only generate auto prompt for next image, 
+        # save existing votes -> only calcuate votes for nexxt image, (votes+confidence+total number of votes) -> calculate majority voting from that information
+        # dont to filtering every time, 
+        # (differenciate between background and not seen voxels in voting) -> remove background keep unseen, 
+        # write complete scene to bop format.
+        # check for the mask size of each object in auto prompting -> the ones with big masks are pronably wrong(detect background)
+
+
         # accept_object_library_btn.click(
     demo.queue()
     demo.launch()
