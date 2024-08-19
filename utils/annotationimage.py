@@ -176,7 +176,6 @@ class AnnotationImage:
         #     plt.show()
         #     #plt savefig
         #     # plt.savefig('skeleton_img.png')
-        print("centers", centers)
         if len(centers) == 0:
             return None
 

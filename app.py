@@ -55,13 +55,13 @@ def load_scene(scene_id, prompting_image):
 
     prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True, interactive=False) 
 
-    yield f"Loading Scene {scene_id}:", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False)
+    yield f"Loading Scene {scene_id}:", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False), gr.Button(visible=False)
     scene = dataset.annotation_scenes[scene_id]
 
     #check if masks are present
     if not scene.has_correct_number_of_masks():
         gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-        yield f"Loading Scene {scene_id}: Generating missing masks", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False)
+        yield f"Loading Scene {scene_id}: Generating missing masks", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False), gr.Button(visible=False)
         scene.generate_masks()
 
     scene.load_images()
@@ -91,7 +91,7 @@ def load_scene(scene_id, prompting_image):
         default_value = None
     annotation_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=False, choices=radio_options, value=default_value)
 
-    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image, annotation_selection, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(dataset.object_library[["id", "name", "description"]], visible=False), gr.Button(visible=False)
+    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image, annotation_selection, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(dataset.object_library[["id", "name", "description"]], visible=False), gr.Button(visible=False), gr.Button("Next Image", elem_id="next_img_btn", visible=True)
 
 
 def change_image(img_selection):
@@ -121,6 +121,19 @@ def change_image(img_selection):
     print(f"Image changed in {time.time() - start_time:.2f} seconds")
 
     return image
+
+def next_image(img_selection):
+    global dataset
+    global predictor
+
+    scene = dataset.active_scene
+    rgb_imgs = scene.annotation_images.keys()
+    indx = list(rgb_imgs).index(img_selection)
+    new_selection = list(rgb_imgs)[indx+1]
+
+    return new_selection
+
+
 
 def click_image(image, evt: gr.SelectData):
     return
@@ -226,7 +239,7 @@ def instanciate_voxel_grid():
     cv2.imwrite("test.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
     yield button, "Voxel Grid Instanciated", image
 
-def accept_annotation(voxel_image, keep_voxels_outside_image):
+def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
     global dataset
     global predictor
 
@@ -240,7 +253,16 @@ def accept_annotation(voxel_image, keep_voxels_outside_image):
             active_image, 
             keep_voxels_outside_image=keep_voxels_outside_image)
         voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
-    return voxel_image
+
+    if active_scene.voxel_grid is not None:
+        # go to next image automatically
+        rgb_imgs = active_scene.annotation_images.keys()
+        indx = list(rgb_imgs).index(img_selection)
+        new_selection = list(rgb_imgs)[indx+1]
+
+        return voxel_image, new_selection
+
+    return voxel_image, img_selection
 
 def show_voxel_grid():
     global dataset
@@ -325,6 +347,7 @@ def main(dataset_path):
                 label = "Select an Image",
                 visible=False,
             )
+            next_img_btn = gr.Button("Next Image", elem_id="next_img_btn", visible=False)
 
         with gr.Row():
             with gr.Column(scale=8):
@@ -386,7 +409,7 @@ def main(dataset_path):
         scene_selection.change(
             load_scene, 
             inputs=[scene_selection, prompting_image], 
-            outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image, id_tb, name_tb, description_tb, obj_library_df, add_object_to_library_btn])
+            outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image, id_tb, name_tb, description_tb, obj_library_df, add_object_to_library_btn, next_img_btn])
         img_selection.change(
             change_image, 
             inputs=[img_selection], 
@@ -411,15 +434,16 @@ def main(dataset_path):
             outputs=[seen_all_objects_btn, status_md, voxel_image])
         accept_annotation_btn.click(
             accept_annotation, 
-            [voxel_image, gr.State(True)], 
-            [voxel_image])
+            [voxel_image, gr.State(True), img_selection], 
+            [voxel_image, img_selection])
         accept_annotation_all_in_view_btn.click(
             accept_annotation, 
-            [voxel_image, gr.State(False)], 
-            [voxel_image])
+            [voxel_image, gr.State(False), img_selection], 
+            [voxel_image, img_selection])
         manual_annotation_done_btn.click(manual_annotation_done)
         show_grid_btn.click(show_voxel_grid)
         add_object_to_library_btn.click(update_object_library, [id_tb, name_tb, description_tb, obj_library_df], [obj_library_df, annotation_object_dropdown])
+        next_img_btn.click(next_image, [img_selection], [img_selection])
     demo.queue()
     demo.launch()
     

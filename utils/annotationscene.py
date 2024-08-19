@@ -116,24 +116,57 @@ class AnnotationScene:
             current_point = points[farthest_index]
 
         return reordered_indices
+    
+    def get_fully_visible_objects_from_segmap(self, segmap, scene_object_ids):
+        unique_ids = np.unique(segmap)
+        unique_ids = unique_ids[unique_ids != 0]
 
+        border_ids = np.unique(
+            np.concatenate((
+                np.unique(segmap[0, :]),
+                np.unique(segmap[-1, :]),
+                np.unique(segmap[:, 0]),
+                np.unique(segmap[:, -1]))
+            )
+        )
+        fully_visible_ids = np.zeros_like(scene_object_ids).astype(bool)
+        for i, id in enumerate(scene_object_ids):
+            if id in unique_ids and id not in border_ids:
+                fully_visible_ids[i] = True
+                
+        return fully_visible_ids
+
+    def find_best_segmap(self, segmaps):
+        best_segmap_index = None
+        max_objects = 0
+
+        for index, segmap in enumerate(segmaps):  # Enumerate to get indices
+            fully_visible_ids = self.get_fully_visible_objects_from_segmap(segmap, self.scene_object_ids)
+            print(fully_visible_ids)
+
+            if np.all(fully_visible_ids):
+                return index
+
+            if sum(fully_visible_ids) > max_objects:
+                best_segmap_index = index
+                max_objects = sum(fully_visible_ids)
+                
+        return best_segmap_index
+    
     def load_images(self):
         image_paths = self.scene_reader.get_images_rgb_path(self.scene_id)
         camera_poses = self.scene_reader.get_camera_poses(self.scene_id)
         rigit_segmaps = self.get_rigit_segmaps()
 
+        best_segmap_index = self.find_best_segmap(rigit_segmaps)
+
         #perform smart camera pose ordering
-        reordering = self.max_distance_camera_reorder(camera_poses, k=int(len(camera_poses)/2))
-        # camera_poses = [camera_poses[i] for i in reordering]
-        # image_paths = [image_paths[i] for i in reordering]
-        # rigit_silhouette = rigit_silhouette[reordering]
-        # for i, image_path in enumerate(image_paths):
-        #     image_path = Path(image_path)
-        #     self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_silhouette[i])
+        reordering = self.max_distance_camera_reorder(camera_poses, k=int(len(camera_poses)/2), start_index=best_segmap_index)
+
         for i in reordering:
             image_path = Path(image_paths[i])
             self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_segmaps[i])
-    
+
     def get_rigit_segmaps(self):
         # read in all scene masks
 

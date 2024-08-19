@@ -10,6 +10,7 @@ import yaml
 import open3d as o3d
 import copy
 from utils.v4r import SceneFileReader
+from pathlib import Path
 
 if 'pyrender' in sys.modules:
     raise ImportError(
@@ -134,6 +135,54 @@ def put_text(text, img, x, y, color):
 
 
 
+def create_masks_full(scene_file_reader, scene_id, output=None):
+    
+    if output is None:
+        output = os.path.join(
+            scene_file_reader.root_dir,
+            scene_file_reader.scenes_dir, 
+            scene_id, 
+            scene_file_reader.mask_dir)
+
+    if not os.path.exists(output):
+        print(f"Output path {output} does not exist.")
+        #create output directory
+        os.makedirs(output)
+
+    camera_poses = scene_file_reader.get_camera_poses(scene_id)
+    intrinsic = scene_file_reader.get_camera_info_scene(scene_id)
+    objects = scene_file_reader.get_object_poses(scene_id)
+    oriented_models = scene_file_reader.load_object_models(scene_id)
+
+    model_colors = []
+    for object in objects:
+        model_colors.append([255, 255, 255])
+
+    camera_poses = [pose.tf for pose in camera_poses]
+
+    filepaths = scene_file_reader.get_images_rgb_path(scene_id)
+    i = 0
+    for oriented_model, model_color in zip(oriented_models, model_colors):
+        masks = project_mesh_to_2d(
+            [oriented_model], camera_poses, [model_color], intrinsic)
+
+        ms=[]
+        for mask in masks:
+            # only take first channel
+            ms.append(mask[:,:,0])
+
+        pbar = tqdm(enumerate(ms), desc=f"Saving")
+        for pose_idx, mask in enumerate(pbar):
+            filename = f"{objects[i][0].name}_" + \
+                f"{i:03d}_" + os.path.basename(filepaths[pose_idx])
+            output_path = os.path.join(
+                output, filename)
+            mask_image = np.array(mask[1])
+            cv2.imwrite(output_path, mask_image)
+            pbar.set_description(f"Saving masks into: {output}")
+        i += 1
+
+    
 def create_masks(scene_file_reader, scene_id, output=None):
     
     if output is None:
@@ -158,8 +207,8 @@ def create_masks(scene_file_reader, scene_id, output=None):
         i += 1
         model_colors.append([i, 0, 0])
 
-    orig_imgs = scene_file_reader.get_images_rgb(scene_id)
     camera_poses = [pose.tf for pose in camera_poses]
+
     annotation_imgs = project_mesh_to_2d(
         oriented_models, camera_poses, model_colors, intrinsic)
 
@@ -170,6 +219,7 @@ def create_masks(scene_file_reader, scene_id, output=None):
             anno_img = cv2.cvtColor(anno_img, cv2.COLOR_RGB2BGRA)
         masks = get_masks_from_render(model_colors, anno_img)
 
+
         for i, mask in enumerate(masks):
             filename = f"{objects[i][0].name}_" + \
                 f"{i:03d}_" + os.path.basename(filepaths[pose_idx])
@@ -178,6 +228,11 @@ def create_masks(scene_file_reader, scene_id, output=None):
             mask_image = np.array(mask) * 255
             cv2.imwrite(output_path, mask_image)
             pbar.set_description(f"Saving masks into: {output}")
+
+def main(dataset, scene_id, output):
+    scene_file_reader = SceneFileReader.create(Path(dataset)/"config.cfg")
+    create_masks_full(scene_file_reader, scene_id, output)
+
 
 if __name__ == "__main__":
     import argparse
