@@ -115,6 +115,7 @@ class VoxelGrid:
         return img
     
     def identify_voxels_in_scene(self, scene):
+        start_time = time.time()
         intrinsics = o3d.camera.PinholeCameraIntrinsic(
             scene.img_width, 
             scene.img_height, 
@@ -125,6 +126,8 @@ class VoxelGrid:
         vis = o3d.visualization.Visualizer()
 
         voxel_correspondences = {tuple(voxel.grid_index): [] for voxel in self.o3d_grid.get_voxels()}
+        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
+
         #iterate over all images that have accepted annotations
         for image in scene.annotation_images.values():
             if not image.annotation_accepted:
@@ -148,12 +151,12 @@ class VoxelGrid:
             vis.get_render_option().background_color = np.array([0, 0, 0])
             vis.poll_events()
             vis.update_renderer()
-            # vis.run()
             rgb = vis.capture_screen_float_buffer(True)
             vis.destroy_window()
 
             print(f"projection time: {time.time()-start_time}")
 
+            start_time = time.time()
             grid_position = np.array(rgb)
             grid_position[:,:,0] = grid_position[:,:,0] * (self.width/self.voxel_size)
             grid_position[:,:,1] = grid_position[:,:,1] * (self.height/self.voxel_size)
@@ -163,11 +166,9 @@ class VoxelGrid:
             loop_start_time = time.time()
 
             valid_positions = (grid_position != (0, 0, 0)).all(axis=-1)
-            #non_zero_ids = (image.get_complete_segmap() != 0)
 
             valid_positions_flat = valid_positions.ravel()
-            #non_zero_ids_flat = non_zero_ids.ravel()
-            combined_mask = valid_positions_flat #& non_zero_ids_flat
+            combined_mask = valid_positions_flat
 
             valid_grid_positions = grid_position.reshape(-1, 3)[combined_mask]
             valid_ids = image.get_complete_segmap().ravel()[combined_mask]
@@ -176,12 +177,13 @@ class VoxelGrid:
                 if pos in voxel_correspondences:
                     voxel_correspondences[pos].append(id)
 
-        #for each position get majority vote
+            print(f"Time taken for loop: {time.time() - loop_start_time:.2f} seconds")
 
         print("majority voting")
+        start_time = time.time()
         for position, votes in voxel_correspondences.items():
             if len(votes) == 0:
-                continue #TODO should i remove never seen voxels at this point?
+                continue
             unique, counts = np.unique(votes, return_counts=True)
 
             if len(unique) == 1:
@@ -200,6 +202,9 @@ class VoxelGrid:
             else:
                 majority_vote = unique[0] if counts[0]/counts[1] > 2 else 0
             voxel_correspondences[position] = majority_vote
+        print(f"Time taken for majority voting: {time.time() - start_time:.2f} seconds")
+
+        start_time = time.time()
         colored_voxel_grid = deepcopy(self.o3d_grid)
         voxel_indices = [voxel.grid_index for voxel in colored_voxel_grid.get_voxels()]
         for voxel_index in voxel_indices:
@@ -217,12 +222,15 @@ class VoxelGrid:
             voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)
             colored_voxel_grid.add_voxel(voxel)
         self.o3d_grid_id = colored_voxel_grid
+        print(f"Time taken for colored voxel grid setup: {time.time() - start_time:.2f} seconds")
 
+        start_time = time.time()
         voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)), dtype=np.uint32)
         for position, vote in voxel_correspondences.items():
             if type(vote) == list:
                 continue
             voxel_grid[position] = vote
+        print(f"Time taken for voxel grid setup: {time.time() - start_time:.2f} seconds")
 
         def filter_voxels(data, kernel_size=3):
             def has_two_neighbors(values):
@@ -230,15 +238,21 @@ class VoxelGrid:
                 count = np.sum(values == center_value) - 1  # Exclude the center itself
                 return center_value if count >= 1 else 0
 
+            start_time = time.time()
             filtered_data = generic_filter(data, has_two_neighbors, size=kernel_size, mode='constant', cval=0)
             changed_voxels = data != filtered_data
             changed_indices = np.argwhere(changed_voxels)
+            print(f"Time taken for voxel filtering: {time.time() - start_time:.2f} seconds")
             return filtered_data, changed_indices
-        
-        voxel_grid, changed_indices = filter_voxels(voxel_grid, kernel_size=3)
 
+        start_time = time.time()
+        voxel_grid, changed_indices = filter_voxels(voxel_grid, kernel_size=3)
+        print(f"Time taken for voxel grid filtering: {time.time() - start_time:.2f} seconds")
+
+        start_time = time.time()
         for index in changed_indices:
             self.o3d_grid_id.remove_voxel(index)
+        print(f"Time taken for removing voxels: {time.time() - start_time:.2f} seconds")
     
     def visualize_colored_meshes(self, meshes):
         def get_random_color():

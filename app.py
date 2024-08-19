@@ -50,50 +50,6 @@ document.addEventListener('contextmenu', handleContextMenu, false);
 </script>
 """
 
-def load_scene(scene_id, prompting_image):
-    global dataset
-
-    prompting_image = gr.Image(label="Upload Image", elem_id="prompting_image", elem_classes="images", visible=True, interactive=False) 
-
-    yield f"Loading Scene {scene_id}:", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False), gr.Button(visible=False)
-    scene = dataset.annotation_scenes[scene_id]
-
-    #check if masks are present
-    if not scene.has_correct_number_of_masks():
-        gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
-        yield f"Loading Scene {scene_id}: Generating missing masks", gr.Dropdown(visible=False), prompting_image, None, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(pd.DataFrame(), visible=False), gr.Button(visible=False), gr.Button(visible=False)
-        scene.generate_masks()
-
-    scene.load_images()
-    rgb_imgs = scene.annotation_images.keys()
-    default_img = list(rgb_imgs)[0] 
-    img_selection = gr.Dropdown(
-        value = default_img, 
-        choices = rgb_imgs,
-        label = "Select an Image",
-        visible=True
-    )
-    dataset.active_scene = scene
-
-    scene.active_image = scene.annotation_images[default_img]
-
-    if scene.active_image.annotation_objects:
-        image = scene.active_image.generate_visualization()
-    else:
-        image = cv2.cvtColor(cv2.imread(scene.active_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
-
-    predictor.set_image(image)
-
-    radio_options = [obj.label for obj in scene.active_image.annotation_objects.values()]
-    if len(radio_options) > 0:
-        default_value = radio_options[-1]
-    else:
-        default_value = None
-    annotation_selection = gr.Radio(label="Select Object", elem_id="annotation_objects", elem_classes="images", visible=False, choices=radio_options, value=default_value)
-
-    yield f"Loaded Scene {scene_id}!", img_selection, prompting_image, annotation_selection, np.zeros((1,1,3)), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Textbox(visible=False), gr.Dataframe(dataset.object_library[["id", "name", "description"]], visible=False), gr.Button(visible=False), gr.Button("Next Image", elem_id="next_img_btn", visible=True)
-
-
 def change_image(img_selection):
     global dataset
     global predictor
@@ -138,7 +94,7 @@ def next_image(img_selection):
 def click_image(image, evt: gr.SelectData):
     return
 
-def js_trigger(input_data, image, annotation_objects_selection):
+def js_trigger(input_data, image, annotation_objects_selection, eraser):
     global dataset
     global predictor
 
@@ -164,7 +120,11 @@ def js_trigger(input_data, image, annotation_objects_selection):
 
     active_image = dataset.active_scene.active_image
 
-    active_image.add_prompt(input_point, input_label, predictor)
+    if not eraser:
+        active_image.add_prompt(input_point, input_label, predictor)
+
+    else:
+        active_image.erase_prompt(input_point, predictor)
 
     image = active_image.generate_visualization()
     return  -1, image
@@ -291,33 +251,164 @@ def manual_annotation_done():
         predictor.set_image(rgb)
         image.generate_auto_prompts(active_scene, predictor)
 
-def update_object_library(id_tb, name_tb, description_tb, obj_library_df):
+    eraser_checkbox = gr.Checkbox(
+        label="erase prompts", 
+        elem_id="eraser", 
+        visible=True,
+        scale=3)
+    return eraser_checkbox
+
+def change_to_prompting_view():
+    """
+    Change the view to the prompting view, handles visibility of the different Components after the object library has been accepted
+
+    Returns
+    -------
+    string
+        status_md with the new status message
+    gr.Column
+        object_library_menu_col with visible=False
+    gr.Column
+        prompting_image with_col visible=True
+    gr.Column
+        annotation_menu with_col visible=True
+    gr.Row
+        scene_navigation_menu_row with visible=True
+    """
+
+    return (
+        "### Select a Scene",
+        gr.Column(visible=False),
+        gr.Column(scale=8, visible=True),
+        gr.Column(scale=2, visible=True),
+        gr.Row(visible=True)
+    )
+
+def update_object_library(id, object_name, object_description, obj_library_df):
+    """
+    This function updates the object library with a new object class
+
+    Parameters
+    ----------
+    id : str
+        The unique ID of the object class provided bt the id_tb
+    object_name : str
+        The name of the object class provided by the name_tb
+    object_description : str
+        The description of the object class provided by the description_tb
+    obj_library_df : pd.DataFrame
+        The current object library dataframe
+
+    Returns
+    -------
+    pd.DataFrame
+        The updated object library dataframe
+    gr.Dropdown
+        A dropdown with the object classes to select from
+    """
+
+
     global dataset
     global predictor
 
-    id = id_tb
-    name = name_tb
-    description = description_tb
+    return_objs = [
+        obj_library_df, 
+        gr.Dropdown(choices=list(obj_library_df['name']), label="Object you want to annotate")]
 
     if id in obj_library_df['id'].values:
         gr.Warning("ID already exists", duration=3)
-        return obj_library_df
-    
-    #check if all textboxes are filled
-    if id in [None, ""] or name in [None, ""] or description in [None, ""]:
+        return return_objs
+    elif id in [None, ""] or object_name in [None, ""] or object_description in [None, ""]:
         gr.Warning("Please fill all textboxes", duration=3)
-        return obj_library_df
+        return return_objs
 
-    new_row = pd.DataFrame({"id": id, "name": name, "description": description, "mesh": "", "scale": 0.001, "color": [[255,120,120]]})
-    obj_library_df = obj_library_df._append(new_row, ignore_index=True)
+    new_row = pd.DataFrame({
+        "id": id, 
+        "name": object_name, 
+        "description": object_description, 
+        "mesh": "", 
+        "scale": 0.001, 
+        "color": [[255,120,120]]})
+    
+    obj_library_df = pd.concat([obj_library_df, new_row], ignore_index=True)
     dataset.object_library = obj_library_df
 
-    return obj_library_df[['id', 'name', 'description']], gr.Dropdown(choices=list(obj_library_df['name']), label="Object you want to annotate", elem_id="prompting_text", elem_classes="images", visible=True)
+    return obj_library_df[['id', 'name', 'description']]
+
+def load_scene(scene_id):
+    """
+    Load a scene and its images given a scene_id
+
+    Parameters
+    ----------
+    scene_id : str
+        scene_id of the scene to load provided by the scene_selection dropdown
+
+    Yields
+    ------
+    str
+        status message
+    gr.Dropdown
+        img_selection dropdown with the images of the scene to select from
+    gr.Radio
+        annotation_objects_selection radio buttons to select the object to annotate
+    """
+    global dataset
+    global predictor
+
+    annotation_objects_selection = gr.Radio(label="Select Object")
+
+    yield (
+        f"Loading Scene {scene_id}:",
+        None,
+        annotation_objects_selection)
+    
+    scene = dataset.annotation_scenes[scene_id]
+    scene.load_scene_data()
+
+    if not scene.has_correct_number_of_masks():
+        gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
+        yield (
+            f"Loading Scene {scene_id}: Generating missing masks",
+            None,
+            annotation_objects_selection)
+        scene.generate_masks()
+
+
+    yield (
+        f"Loading Scene {scene_id}: Loading Images",
+        None,
+        annotation_objects_selection)
+    
+    scene.load_images()
+    rgb_imgs = scene.annotation_images.keys()
+    default_img = list(rgb_imgs)[0] 
+    img_selection = gr.Dropdown(
+        value = default_img, 
+        choices = rgb_imgs,
+        label = "Select an Image",
+        visible=True
+    )
+    dataset.active_scene = scene
+    scene.active_image = scene.annotation_images[default_img]
+
+    radio_options = [obj.label for obj in scene.active_image.annotation_objects.values()]
+    if len(radio_options) > 0:
+        default_value = radio_options[-1]
+    else:
+        default_value = None
+    annotation_selection = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
+
+    yield (
+        f"Select object to annotate",
+        img_selection,
+        annotation_selection)
 
 
 def main(dataset_path):
     global dataset
     global predictor
+
     dataset = AnnotationDataset(dataset_path)
 
     sam_checkpoint = "model_checkpoints/sam_vit_h_4b8939.pth"
@@ -330,14 +421,15 @@ def main(dataset_path):
 
     predictor = SamPredictor(sam)
 
-    with gr.Blocks(head=js_events) as demo:
-        status_md = gr.Markdown(f"Select a Folder from Dataset {dataset_path}")
+    with gr.Blocks(head=js_events, fill_height=True) as demo:
+        status_md = gr.Markdown(
+            "### Add all objects classes to the object library first, "
+            "click \"Accept object library\" to continue")
         # prompting_state = gr.State()
 
         js_parser = gr.Textbox(label="js_parser", elem_id="js_parser", visible=False)
-        # #IDEA maybe hide until scene is selected 
 
-        with gr.Row():
+        with gr.Row(visible=False) as scene_navigation_menu_row:
             scene_selection = gr.Dropdown(
                 choices = dataset.get_scene_ids(),
                 label = "Select a Scene",
@@ -345,71 +437,66 @@ def main(dataset_path):
             img_selection = gr.Dropdown(
                 choices = [],
                 label = "Select an Image",
-                visible=False,
             )
-            next_img_btn = gr.Button("Next Image", elem_id="next_img_btn", visible=False)
+            next_img_btn = gr.Button("Next Image")
 
         with gr.Row():
-            with gr.Column(scale=8):
+            with gr.Column(scale=8) as object_library_menu_col:
+                obj_library_df = gr.Dataframe(
+                    dataset.object_library[["id", "name", "description"]], 
+                    interactive=False)
                 with gr.Row():
-                    obj_library_df = gr.Dataframe(dataset.object_library[["id", "name", "description"]], interactive=False)
-                with gr.Row():
-                    id_tb = gr.Textbox(label="ID", elem_id="id_tb", visible=True)
-                    name_tb = gr.Textbox(label="Name", elem_id="name_tb", visible=True)
-                    description_tb = gr.Textbox(label="Description", elem_id="description_tb", visible=True)
-                    add_object_to_library_btn = gr.Button("Add object", elem_id="submit_btn", visible=True)
-                with gr.Row():
-                    prompting_image = gr.Image(
-                        label="Upload Image", 
-                        elem_id="prompting_image", 
-                        elem_classes="images", 
-                        visible=False, 
-                        interactive=False) 
-                with gr.Row():
-                    instructions = gr.Markdown("If all object classes are part of the object library, you can start annotating by selecting a scene")
+                    id_tb = gr.Textbox(label="ID")
+                    name_tb = gr.Textbox(label="Name")
+                    description_tb = gr.Textbox(label="Description")
+                    add_object_to_library_btn = gr.Button("Add object")
+                    accept_object_library_btn = gr.Button("Accept object library")
+
+            with gr.Column(scale=8, visible=False) as prompting_image_col:
+                prompting_image = gr.Image(
+                    label="Upload Image", 
+                    elem_id="prompting_image", 
+                    elem_classes="images",
+                    interactive=False) 
                 
-            with gr.Column(scale=2):
+            with gr.Column(scale=2, visible=False) as annotation_menu_col:
                 annotation_object_dropdown = gr.Dropdown(
                     choices = list(dataset.object_library['name']),
-                    label="Object you want to annotate", 
-                    elem_id="prompting_text", 
-                    elem_classes="images", 
-                    visible=True)
-                annotation_objects_selection = gr.Radio(
-                    label="Select Object", 
-                    elem_id="annotation_objects", 
-                    elem_classes="images", 
-                    visible=True)
-                seen_all_objects_btn = gr.Button(
-                    "Seen All Objects fully", 
-                    elem_id="seen_all_objects", 
-                    elem_classes="images", 
-                    visible=True)
+                    label="Object you want to annotate")
+                
+                annotation_objects_selection = gr.Radio(label="Select Object")
+                seen_all_objects_btn = gr.Button("Seen All Objects fully")
+
                 with gr.Row():
                     with gr.Column(min_width=100):
                         accept_annotation_all_in_view_btn = gr.Button("Accept, all objects in view")
                     with gr.Column(min_width=100):
                         accept_annotation_btn = gr.Button("Accept, not all objects in view\n")
-                voxel_image = gr.Image(
-                    label="Voxel Grid", 
-                    elem_id="voxel_image", 
-                    elem_classes="images", 
-                    visible=True, 
-                    interactive=False)
-                show_grid_btn = gr.Button(
-                    "Show Voxel Grid", 
-                    elem_id="show_grid", 
-                    elem_classes="images", 
-                    visible=True)
-                manual_annotation_done_btn = gr.Button(
-                    "Manual Annotation Done", 
-                    elem_id="manual_annotation_done", 
-                    elem_classes="images", 
-                    visible=True)
+
+                voxel_image = gr.Image(label="Voxel Grid", interactive=False)
+                show_grid_btn = gr.Button("Show Voxel Grid")
+                manual_annotation_done_btn = gr.Button("Manual Annotation Done")
+                eraser_checkbox = gr.Checkbox(label="erase prompts")
+                
+        accept_object_library_btn.click(
+            change_to_prompting_view,
+            outputs=[
+                status_md, 
+                object_library_menu_col, 
+                prompting_image_col, 
+                annotation_menu_col, 
+                scene_navigation_menu_row])
+        
+        add_object_to_library_btn.click(
+            update_object_library, 
+            [id_tb, name_tb, description_tb, obj_library_df], 
+            [obj_library_df])
+
         scene_selection.change(
             load_scene, 
-            inputs=[scene_selection, prompting_image], 
-            outputs=[status_md, img_selection, prompting_image, annotation_objects_selection, voxel_image, id_tb, name_tb, description_tb, obj_library_df, add_object_to_library_btn, next_img_btn])
+            inputs=[scene_selection], 
+            outputs=[status_md, img_selection, annotation_objects_selection])
+        
         img_selection.change(
             change_image, 
             inputs=[img_selection], 
@@ -427,7 +514,7 @@ def main(dataset_path):
             [prompting_image])
         js_parser.input(
             js_trigger, 
-            [js_parser, prompting_image, annotation_objects_selection], 
+            [js_parser, prompting_image, annotation_objects_selection, eraser_checkbox], 
             [js_parser, prompting_image])
         seen_all_objects_btn.click(
             instanciate_voxel_grid,
@@ -440,10 +527,10 @@ def main(dataset_path):
             accept_annotation, 
             [voxel_image, gr.State(False), img_selection], 
             [voxel_image, img_selection])
-        manual_annotation_done_btn.click(manual_annotation_done)
+        manual_annotation_done_btn.click(manual_annotation_done, outputs=[eraser_checkbox])
         show_grid_btn.click(show_voxel_grid)
-        add_object_to_library_btn.click(update_object_library, [id_tb, name_tb, description_tb, obj_library_df], [obj_library_df, annotation_object_dropdown])
         next_img_btn.click(next_image, [img_selection], [img_selection])
+        # accept_object_library_btn.click(
     demo.queue()
     demo.launch()
     

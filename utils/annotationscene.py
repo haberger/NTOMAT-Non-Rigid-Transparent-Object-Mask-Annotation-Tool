@@ -19,15 +19,15 @@ class AnnotationScene:
         self.camera_intrinsics = camera_intrinsics
         self.img_width = img_width
         self.img_height = img_height
-        if scene_reader is not None:
-            self.poi = self.get_cameras_point_of_interest()
-            self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
-        else:
-            self.poi = None
-            self.dataset_object_ids = None
-            self.names = None
-            self.scene_object_ids = None
-        # -> list object names in the beginning. let annotater add to the list object name and count 
+
+        self.poi = None
+        self.dataset_object_ids = None
+        self.names = None
+        self.scene_object_ids = None
+
+    def load_scene_data(self):
+        self.poi = self.get_cameras_point_of_interest()
+        self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
 
     def scene_to_pickle(self, folder="../debug_data_promptgeneration"):
         path = Path(folder)
