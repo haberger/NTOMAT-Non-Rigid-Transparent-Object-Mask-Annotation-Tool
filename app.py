@@ -50,148 +50,6 @@ document.addEventListener('contextmenu', handleContextMenu, false);
 </script>
 """
 
-def next_image(img_selection):
-    global dataset
-    global predictor
-
-    scene = dataset.active_scene
-    rgb_imgs = scene.annotation_images.keys()
-    indx = list(rgb_imgs).index(img_selection)
-    new_selection = list(rgb_imgs)[indx+1]
-
-    return new_selection
-
-
-
-def click_image(image, evt: gr.SelectData):
-    return
-
-def js_trigger(input_data, image, annotation_objects_selection, eraser):
-    global dataset
-    global predictor
-
-    print(annotation_objects_selection)
-    if annotation_objects_selection is None:
-        gr.Warning("Please add an object to annotate first", duration=3)
-        return -1, image
-
-    data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
-    print(data)
-
-    #factor in image size -> if scaled, need to scale back to original size
-    if data['imgWidth'] != dataset.active_scene.img_width or ['imgHeight'] != dataset.active_scene.img_height:
-        x = int(data['x']) * dataset.active_scene.img_width / int(data['imgWidth'])
-        y = int(data['y']) * dataset.active_scene.img_height / int(data['imgHeight'])
-        data['x'] = x
-        data['y'] = y
-    
-    print("Image Clicked")
-
-    input_point = [[int(data['x']), int(data['y'])]]
-    input_label = [0] if data['button'] == 'right' else [1]
-
-    active_image = dataset.active_scene.active_image
-
-    if not eraser:
-        active_image.add_prompt(input_point, input_label, predictor)
-
-    else:
-        active_image.erase_prompt(input_point, predictor)
-
-    image = active_image.generate_visualization()
-    return  -1, image
-
-def change_annotation_object(annotation_objects_selection):
-    global dataset
-    global predictor
-
-    if annotation_objects_selection is None:
-        return None
-    active_scene = dataset.active_scene
-
-    active_scene.active_image.active_object = active_scene.active_image.annotation_objects[annotation_objects_selection]
-
-    image = active_scene.active_image.generate_visualization()
-
-    return image
-
-def instanciate_voxel_grid():
-    global dataset
-    global predictor
-
-    active_scene = dataset.active_scene
-    button = gr.Button(
-        "Seen All Objects", 
-        elem_id="seen_all_objects", 
-        elem_classes="images", 
-        visible=False)
-    yield button, "Instanciating Voxel Grid", np.zeros((1,1,3))
-    active_scene.instanciate_voxel_grid_at_poi(voxel_size=0.005)
-    yield button, "Voxel Grid Instanciated", np.zeros((1,1,3))
-    image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
-    #save image 
-    cv2.imwrite("test.png", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-    yield button, "Voxel Grid Instanciated", image
-
-def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
-    global dataset
-    global predictor
-
-    print("Accepting Annotation")
-    print(keep_voxels_outside_image)
-    active_scene = dataset.active_scene
-    active_image = active_scene.active_image
-    active_image.annotation_accepted = True
-    if active_scene.voxel_grid is not None:
-        active_scene.carve_silhouette(
-            active_image, 
-            keep_voxels_outside_image=keep_voxels_outside_image)
-        voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
-
-    if active_scene.voxel_grid is not None:
-        # go to next image automatically
-        rgb_imgs = active_scene.annotation_images.keys()
-        indx = list(rgb_imgs).index(img_selection)
-        new_selection = list(rgb_imgs)[indx+1]
-
-        return voxel_image, new_selection
-
-    return voxel_image, img_selection
-
-def show_voxel_grid():
-    global dataset
-    global predictor
-
-    active_scene = dataset.active_scene
-    if active_scene.voxel_grid is not None:
-        o3d.visualization.draw_geometries([active_scene.voxel_grid.o3d_grid])
-
-def manual_annotation_done():
-    global dataset
-    global predictor
-
-    active_scene = dataset.active_scene
-
-    #write dataset to pickle into debug_data_promptgeneration
-    # active_scene.scene_to_pickle("debug_data_promptgeneration")
-
-    active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
-
-    for image in active_scene.annotation_images.values():
-        if image.annotation_accepted:
-            continue
-        rgb = cv2.imread(image.rgb_path, cv2.IMREAD_COLOR)
-        rgb = cv2.cvtColor(rgb, cv2.COLOR_BGR2RGB)
-        predictor.set_image(rgb)
-        image.generate_auto_prompts(active_scene, predictor)
-
-    eraser_checkbox = gr.Checkbox(
-        label="erase prompts", 
-        elem_id="eraser", 
-        visible=True,
-        scale=3)
-    return eraser_checkbox
-
 def load_predictor(checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     """
     Load the predictor model, sets it to the global variable predictor
@@ -314,7 +172,7 @@ def load_scene(scene_id):
     annotation_objects_selection = gr.Radio(label="Select Object")
 
     yield (
-        f"Loading Scene {scene_id}:",
+        f"### Loading Scene {scene_id}:",
         None,
         annotation_objects_selection)
     
@@ -324,14 +182,14 @@ def load_scene(scene_id):
     if not scene.has_correct_number_of_masks():
         gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
         yield (
-            f"Loading Scene {scene_id}: Generating missing masks",
+            f"### Loading Scene {scene_id}: Generating missing masks",
             None,
             annotation_objects_selection)
         scene.generate_masks()
 
 
     yield (
-        f"Loading Scene {scene_id}: Loading Images",
+        f"### Loading Scene {scene_id}: Loading Images",
         None,
         annotation_objects_selection)
     
@@ -356,7 +214,7 @@ def load_scene(scene_id):
     annotation_objects_selection = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
 
     yield (
-        f"Select object to annotate",
+        f"### Select object to annotate",
         img_selection,
         annotation_objects_selection)
 
@@ -386,6 +244,10 @@ def change_image(img_selection, object_selection):
     prompt_image = dataset.active_scene.annotation_images[img_selection]
     dataset.active_scene.active_image = prompt_image
 
+    # TODO:
+    # always save the dataset version before the image changes as a savestate
+    # if manual annotation is done, do auto prompting
+
     image = cv2.cvtColor(cv2.imread(prompt_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     predictor.set_image(image)
 
@@ -407,6 +269,8 @@ def add_object(object_name):
     -------
     gr.Radio
         The updated annotation_objects_selection radio buttons
+    str
+        The updated status message
     """
     global dataset
 
@@ -421,7 +285,16 @@ def add_object(object_name):
 
     radio_buttons = gr.Radio(label="Select Object", choices=radio_options, value=default_value)
 
-    return radio_buttons
+    status_md = ("### Click on the image to add prompts (Foreground - Left click, "
+                "Background - Right click)\n"
+                " - If all objects are in frame click **Accept, all objects in "
+                "view** if not click **Accept, not all objects in view**\n"
+                " - Once all objects have been in frame fully over multiple images click "
+                "**Seen All Objects fully** after accepting the annotation -> instantiates the voxel grid\n"
+                " - If the voxel grid has sufficient accuracy click **Manual Annotation Done**")
+
+
+    return status_md, radio_buttons
 
 def change_annotation_object(annotation_objects_selection):
     """
@@ -449,7 +322,191 @@ def change_annotation_object(annotation_objects_selection):
 
     return image
 
-def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
+def click_image():
+    """
+    This function just exists so the curser change gets triggered by gradio when hivering over the image.
+    Changes the curser to a crosshair for better accuracy when annotating
+    """
+    return
+
+def js_trigger(input_data, image, annotation_objects_selection, eraser):
+    """
+    This function is triggered by a javascript event when the user clicks on the image. 
+    It adds a prompt to the image at the clicked location, or erases a prompt if the eraser checkbox is checked.
+    If no annotation object is selected, it will show a warning message.
+
+    Parameters
+    ----------
+    input_data : str
+        The data string containing the x and y coordinates of the click, the button pressed, and the image width and height
+    image : np.ndarray
+        The current prompting image visaliszation
+    annotation_objects_selection : string
+        The selected object to annotate
+    eraser : bool
+        If the eraser checkbox is checked
+
+    Returns
+    -------
+    str
+        the reset input_data string for the js_parser textbox
+    np.ndarray
+        The updated image visualization
+    """
+    global dataset
+    global predictor
+
+    if annotation_objects_selection is None:
+        gr.Warning("Please add an object to annotate first", duration=3)
+        return -1, image
+
+    data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
+
+    # Scale coordinates back to the original image size if needed
+    if data['imgWidth'] != dataset.active_scene.img_width or data['imgHeight'] != dataset.active_scene.img_height:
+        data['x'] = int(data['x']) * dataset.active_scene.img_width / int(data['imgWidth'])
+        data['y'] = int(data['y']) * dataset.active_scene.img_height / int(data['imgHeight'])
+
+    input_point = [[int(data['x']), int(data['y'])]]
+    input_label = [0] if data['button'] == 'right' else [1]
+
+    active_image = dataset.active_scene.active_image
+
+    if eraser:
+        active_image.erase_prompt(input_point, predictor)
+    else:
+        active_image.add_prompt(input_point, input_label, predictor)
+
+    return -1, active_image.generate_visualization()
+
+def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
+    """
+    Accept the annotation for the current image, and carve the voxel grid to the silhouette of the image
+    depending on the keep_voxels_outside_image parameter
+
+    Parameters
+    ----------
+    voxel_image : np.ndarray
+        top down view of the voxel grid
+    keep_voxels_outside_image : bool
+        if True, keep voxels outside the image, if False, only keep voxels inside the image in carving process
+    img_selection : str
+        current image selected in the img_selection dropdown
+
+    Returns
+    -------
+    np.ndarray
+        top down view of the voxel grid
+    str
+        changed image selection after moving to the next image
+    """
+    global dataset
+    global predictor
+
+    active_scene = dataset.active_scene
+    active_image = active_scene.active_image
+    active_image.annotation_accepted = True
+    if active_scene.voxel_grid is not None:
+        active_scene.carve_silhouette(
+            active_image, 
+            keep_voxels_outside_image=keep_voxels_outside_image)
+        voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
+        img_selection = active_scene.next_image_name()
+
+    return voxel_image, img_selection
+
+def instanciate_voxel_grid(voxel_size):
+    """
+    Instanciate the voxel grid at the point of interest, hides the button that triggers the instanciation of the voxel grid
+
+    Parameters
+    ----------
+    voxel_size : float
+        size of the voxels in meters
+
+    Yields
+    ------
+    gr.Button
+        button that triggers the instanciation of the voxel grid
+    str
+        status message
+    np.ndarray
+        top down view of the voxel grid
+    str
+        changed image selection for the img_selection dropdown
+    """
+    
+    global dataset
+
+    active_scene = dataset.active_scene
+    status_md = ("### Click on the image to add prompts (Foreground - Left click, "
+                "Background - Right click)\n")
+    if active_scene.active_image.annotation_accepted is False:
+        gr.Warning("Please accept the annotation first", duration=3)
+        yield gr.Button("Seen All Objects fully"), status_md, np.zeros((1,1,3)), active_scene.active_image.rgb_path.name
+    else:
+        button = gr.Button(visible=False)
+        yield button, "### Instanciating Voxel Grid", np.zeros((1,1,3)), active_scene.active_image.rgb_path.name
+
+        active_scene.instanciate_voxel_grid_at_poi(voxel_size)
+
+
+        image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
+        yield button, status_md, image, active_scene.next_image_name()
+
+def show_voxel_grid():
+    """
+    Shows the voxel grid in a 3D viewer if it exists
+    """
+    global dataset
+
+    active_scene = dataset.active_scene
+    if active_scene.voxel_grid is not None:
+        o3d.visualization.draw_geometries([active_scene.voxel_grid.o3d_grid])
+
+def next_image():
+    """
+    Move to the next image in the scene
+
+    Returns
+    -------
+    str
+        The name of the next image that gets set into the img_selection dropdown
+    """
+
+    global dataset
+    return  dataset.active_scene.next_image_name()
+
+def manual_annotation_done():
+    """
+    Set the manual annotation done flag to True, and hide the button that triggers the manual annotation done
+
+    Yields
+    ------
+    str
+        status message
+    gr.Button
+        button that triggers the manual annotation done
+    """
+
+    global dataset
+    global predictor
+
+    active_scene = dataset.active_scene
+
+    yield "### Identifying Voxels in Scene", gr.Button(visible=False), active_scene.active_image.generate_visualization()
+
+    active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
+    active_scene.manual_annotation_done = True
+
+    status_md = ("### Click on the image to add prompts (Foreground - Left click, "
+            "Background - Right click), or erase existing prompts\n")
+    
+    active_scene.active_image.generate_auto_prompts(active_scene, predictor)
+    
+    yield status_md, gr.Button(visible=False), active_scene.active_image.generate_visualization()
+
+def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     global dataset
     global predictor
 
@@ -541,19 +598,15 @@ def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth",
         annotation_object_dropdown.select(
             add_object, 
             [annotation_object_dropdown], 
-            [annotation_objects_selection])
+            [status_md, annotation_objects_selection])
         
         annotation_objects_selection.change(
             change_annotation_object, 
             [annotation_objects_selection], 
             [prompting_image])
         
-
-        #TODO
-
         prompting_image.select(
-            click_image, 
-            [prompting_image])
+            click_image)
         
         js_parser.input(
             js_trigger, 
@@ -571,13 +624,16 @@ def main(dataset_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth",
 
         seen_all_objects_btn.click(
             instanciate_voxel_grid,
-            outputs=[seen_all_objects_btn, status_md, voxel_image])
+            [gr.State(voxel_size)],
+            outputs=[seen_all_objects_btn, status_md, voxel_image, img_selection])
 
         show_grid_btn.click(show_voxel_grid)
 
-        next_img_btn.click(next_image, [img_selection], [img_selection])
+        next_img_btn.click(next_image, outputs=[img_selection])
         
-        manual_annotation_done_btn.click(manual_annotation_done, outputs=[eraser_checkbox])
+        manual_annotation_done_btn.click(
+            manual_annotation_done, 
+            outputs=[status_md, manual_annotation_done_btn, prompting_image])
 
         
         #TODO add a undo button, 
@@ -601,7 +657,14 @@ if __name__ == "__main__":
         dest='dataset_path',
         default = '../Dataset',
         help='path_to_3D-DAT Dataset')
+    
+    #add argument for voxel_size
+    parser.add_argument(
+        '-v',
+        dest='voxel_size',
+        default=0.005,
+        help='voxel_size')
 
     args = parser.parse_args()
 
-    main(Path(args.dataset_path))
+    main(Path(args.dataset_path), voxel_size=float(args.voxel_size))

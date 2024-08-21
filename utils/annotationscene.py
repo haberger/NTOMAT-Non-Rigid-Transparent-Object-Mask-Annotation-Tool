@@ -25,6 +25,8 @@ class AnnotationScene:
         self.names = None
         self.scene_object_ids = None
 
+        self.manual_annotation_done = False
+
     def load_scene_data(self):
         self.poi = self.get_cameras_point_of_interest()
         self.dataset_object_ids, self.names, self.scene_object_ids = self.get_object_metadata()
@@ -101,8 +103,6 @@ class AnnotationScene:
             anno_image.active_object = annotation_object #TODO check if this handles corrrectly if i change image in the middle of the annotation process
             anno_image.annotation_objects[annotation_object.label] = annotation_object
         
-
-
     def get_object_metadata(self):
         objects_data = self.scene_reader.get_object_poses(self.scene_id)
         object_list = [inner_list[0] for inner_list in objects_data]
@@ -420,3 +420,10 @@ class AnnotationScene:
 
     def get_random_color(self):
         return list(np.random.choice(range(256), size=3) / 255.0)
+    
+    def next_image_name(self):
+        active_image = self.active_image.rgb_path.name
+        rgb_imgs = self.annotation_images.keys()
+        indx = list(rgb_imgs).index(active_image)
+        new_selection = list(rgb_imgs)[indx+1]
+        return new_selection
