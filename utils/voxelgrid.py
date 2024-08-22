@@ -6,8 +6,9 @@ import pickle
 import cv2
 from scipy.ndimage import generic_filter
 
+o3d.visualization.rendering.OffscreenRenderer.__deepcopy__ = lambda self, memo: self
 class VoxelGrid:
-    def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None):
+    def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None, img_width=500, img_height=500):
         self.width = width
         self.height = height
         self.depth = depth
@@ -15,6 +16,8 @@ class VoxelGrid:
         self.origin = origin
         self.color = color
         self.o3d_grid_id = None
+        self.top_down_renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
+        self.projection_renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
         if width is not None and height is not None and depth is not None:
             self.o3d_grid = self.generate_colored_voxelgrid(voxel_size, origin, height, width, depth)
         else:
@@ -89,14 +92,15 @@ class VoxelGrid:
 
     def get_voxel_grid_top_down_view(self, z=1):
 
+        self.top_down_renderer.scene.clear_geometry()
+
         poi = [self.origin[0] + self.width/2, self.origin[1] + self.height/2, self.origin[2] + self.depth/2]
-        renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
 
         mtl = o3d.visualization.rendering.MaterialRecord()
         mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
         mtl.shader = "defaultUnlit"
 
-        renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
+        self.top_down_renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
 
         intrinsics = o3d.camera.PinholeCameraIntrinsic(500, 500, 250, 250, 250, 250)
         #extrensics: translation 2 meters above self.poi in z. Looking down
@@ -110,8 +114,8 @@ class VoxelGrid:
 
         extrinsics = np.linalg.inv(pose)
 
-        renderer.setup_camera(intrinsics, extrinsics)
-        img = np.asarray(renderer.render_to_image())
+        self.top_down_renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(self.top_down_renderer.render_to_image())
         return img
     
     def identify_voxels_in_scene(self, scene):
@@ -271,21 +275,16 @@ class VoxelGrid:
 
     def project_voxelgrid(self, img_width, img_height, intrinsics, cam_pose=None, voxelgrid=None):
 
-        # vis = o3d.visualization.Visualizer()
-        # vis.create_window(visible=False)
-        # vis.destroy_window()
-        #visualize voxelgrid
-
-        renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
-        renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
-        renderer.scene.view.set_post_processing(False)
+        self.projection_renderer.scene.clear_geometry()
+        self.projection_renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
+        self.projection_renderer.scene.view.set_post_processing(False)
 
         mtl = o3d.visualization.rendering.MaterialRecord()
         # mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
         mtl.shader = "defaultUnlit"
 
-        renderer.scene.clear_geometry()
-        renderer.scene.add_geometry("grid", voxelgrid, mtl)
+        self.projection_renderer.scene.clear_geometry()
+        self.projection_renderer.scene.add_geometry("grid", voxelgrid, mtl)
 
         intrinsics = o3d.camera.PinholeCameraIntrinsic(img_width, img_height, intrinsics[0, 0], intrinsics[1, 1], intrinsics[0, 2], intrinsics[1, 2])
         #extrensics: translation 2 meters above self.poi in z. Looking down
@@ -293,14 +292,9 @@ class VoxelGrid:
         pose = cam_pose
         extrinsics = np.linalg.inv(pose.tf)
 
-        renderer.setup_camera(intrinsics, extrinsics)
-        img = np.asarray(renderer.render_to_image()).astype(np.uint8)
+        self.projection_renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(self.projection_renderer.render_to_image()).astype(np.uint8)
 
-        #do some majority filtering to smooth out the segmap
-
-        # cv2.imshow("voxelgrid", img*10)
-        # cv2.waitKey(0)
-        # cv2.destroyAllWindows()
 
         return img
     

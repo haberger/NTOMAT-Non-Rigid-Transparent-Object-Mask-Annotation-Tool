@@ -114,27 +114,6 @@ class AnnotationScene:
             names.append(object_list[i].name)
             scene_object_ids.append(i+1)
         return dataset_object_ids, names, scene_object_ids
-
-    def greedy_farthest_point_reorder(points, start_index=0):
-
-        num_points = points.shape[0]
-        remaining_indices = list(range(num_points))  # Indices of points not yet chosen
-        reordered_indices = [start_index]  # Start with the specified index
-
-        # Remove the starting point from remaining indices
-        remaining_indices.remove(start_index)
-        current_point = points[start_index]
-
-        # Greedily choose farthest points
-        while remaining_indices:
-            distances = np.linalg.norm(points[remaining_indices] - current_point, axis=1)  # Calculate distances
-            farthest_index = remaining_indices[np.argmax(distances)]  # Index of farthest point
-
-            reordered_indices.append(farthest_index)
-            remaining_indices.remove(farthest_index)
-            current_point = points[farthest_index]
-
-        return reordered_indices
     
     def get_fully_visible_objects_from_segmap(self, segmap, scene_object_ids):
         unique_ids = np.unique(segmap)
@@ -255,14 +234,44 @@ class AnnotationScene:
 
         return reordered_indices
 
-
-        # Combine and Return Indices
-        remaining_indices = [i for i in range(len(poses)) if i not in downsampled_indices]
-        reordered_indices = downsampled_indices + remaining_indices 
-        print(reordered_indices)
-        return reordered_indices
     
-    def instanciate_voxel_grid_at_poi(self, voxel_size=0.005):
+    def instanciate_voxel_grid_at_poi_fast(self, trigger_image, voxel_size=0.005,):
+
+        start_time = time.time()
+        camera_poses = [image.camera_pose for image in self.annotation_images.values()]
+
+        # get largest distance between cameras and ray intersection
+        distances = []
+        for camera_pose in camera_poses:
+            distances.append(np.linalg.norm(self.poi - camera_pose.tf[:3, 3]))
+        max_distance = np.max(distances)
+
+        width = max_distance * 1.5
+        height = max_distance * 1.5
+        depth = max_distance * 1.5
+        print(width, height, depth)
+        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
+
+        start_time = time.time()
+        self.voxel_grid = VoxelGrid(
+            width=width,
+            height=height,
+            depth=depth,
+            voxel_size=voxel_size,
+            origin=np.array([self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2]).astype(np.float64),
+            color=np.array([0.2, 0.2, 0.2]).astype(np.float64),
+            img_width=self.img_width,
+            img_height=self.img_height
+        )
+
+        self.carve_silhouette(trigger_image, keep_voxels_outside_image=False)
+
+        images = [image for image in self.annotation_images.values() if image.annotation_accepted]
+        for image in images:
+            self.carve_silhouette(image, keep_voxels_outside_image=True)
+
+
+    def instanciate_voxel_grid_at_poi_with_prefiltering(self, voxel_size=0.005):
 
         #TODO maybe add warning if obejcts are further away from the poi than 0.5m
 
@@ -288,7 +297,9 @@ class AnnotationScene:
             depth=depth,
             voxel_size=voxel_size,
             origin=np.array([self.poi[0] - width/2, self.poi[1] - height/2, self.poi[2] - depth/2]).astype(np.float64),
-            color=np.array([0.2, 0.2, 0.2]).astype(np.float64)
+            color=np.array([0.2, 0.2, 0.2]).astype(np.float64),
+            img_width=self.img_width,
+            img_height=self.img_height
         )
         print(f"Time taken for voxel grid creation: {time.time() - start_time:.2f} seconds")
 

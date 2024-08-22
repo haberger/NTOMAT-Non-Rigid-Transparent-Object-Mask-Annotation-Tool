@@ -12,9 +12,12 @@ from utils.annotationimage import AnnotationImage, AnnotationObject
 from utils.voxelgrid import VoxelGrid
 import pandas as pd
 import pickle
+from copy import deepcopy
+from collections import deque
 
 dataset = None
 predictor = None
+savestate_stack = deque(maxlen=2)
 
 js_events = """
 <script>
@@ -65,6 +68,8 @@ def load_predictor(checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", mod
     """
     global predictor
 
+    print("load_predictor")
+
     sam = sam_model_registry[model_type](checkpoint=checkpoint_path)
     sam.to(device=device)
 
@@ -94,6 +99,8 @@ def accept_object_library(obj_library_df):
     gr.Dropdown
         The annotation_object_dropdown component with the object classes to select from.
     """
+
+    print("accept_object_library")
     dataset_objects = [f"{obj['name']} - {obj['id']}" for _, obj in obj_library_df.iterrows()]
 
     return (
@@ -126,7 +133,7 @@ def update_object_library(id, object_name, object_description, obj_library_df):
         The updated object library dataframe
     """
 
-
+    print("update_object_library")
     global dataset
 
     if id in obj_library_df['id'].values:
@@ -167,6 +174,8 @@ def load_scene(scene_id):
     gr.Radio
         annotation_objects_selection radio buttons to select the object to annotate
     """
+
+    print("load_scene")
     global dataset
 
     annotation_objects_selection = gr.Radio(label="Select Object")
@@ -235,6 +244,7 @@ def change_image(img_selection, object_selection):
         The image visualization showing existing prompts and annotations
     """
 
+    print("change_image")
     global dataset
     global predictor 
 
@@ -244,15 +254,16 @@ def change_image(img_selection, object_selection):
     prompt_image = dataset.active_scene.annotation_images[img_selection]
     dataset.active_scene.active_image = prompt_image
 
-    # TODO:
-    # always save the dataset version before the image changes as a savestate
-    # if manual annotation is done, do auto prompting
-
     image = cv2.cvtColor(cv2.imread(prompt_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     predictor.set_image(image)
 
+
+
     if object_selection is not None:
         prompt_image.active_object = prompt_image.annotation_objects[object_selection]
+
+    if dataset.active_scene.manual_annotation_done:
+        prompt_image.generate_auto_prompts(dataset.active_scene, predictor)
 
     return prompt_image.generate_visualization()
 
@@ -272,6 +283,8 @@ def add_object(object_name):
     str
         The updated status message
     """
+
+    print("add_object")
     global dataset
 
     active_scene = dataset.active_scene
@@ -294,7 +307,7 @@ def add_object(object_name):
                 " - If the voxel grid has sufficient accuracy click **Manual Annotation Done**")
 
 
-    return status_md, radio_buttons
+    return status_md, radio_buttons, None
 
 def change_annotation_object(annotation_objects_selection):
     """
@@ -310,16 +323,17 @@ def change_annotation_object(annotation_objects_selection):
     np.ndarray
         The image visualization showing existing prompts and annotations
     """
+
+    print("change_annotation_object")
     global dataset
 
     if annotation_objects_selection is None:
-        return None
+        return dataset.active_scene.active_image.generate_visualization()
     prompt_image = dataset.active_scene.active_image
 
     prompt_image.active_object = prompt_image.annotation_objects[annotation_objects_selection]
 
     image = prompt_image.generate_visualization()
-
     return image
 
 def click_image():
@@ -327,6 +341,8 @@ def click_image():
     This function just exists so the curser change gets triggered by gradio when hivering over the image.
     Changes the curser to a crosshair for better accuracy when annotating
     """
+
+    print("click_image")
     return
 
 def js_trigger(input_data, image, annotation_objects_selection, eraser):
@@ -353,6 +369,9 @@ def js_trigger(input_data, image, annotation_objects_selection, eraser):
     np.ndarray
         The updated image visualization
     """
+
+    print("js_trigger")
+
     global dataset
     global predictor
 
@@ -400,19 +419,29 @@ def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
     str
         changed image selection after moving to the next image
     """
+
+    print("accept_annotation")
     global dataset
     global predictor
+    global savestate_stack
 
     active_scene = dataset.active_scene
     active_image = active_scene.active_image
     active_image.annotation_accepted = True
+
+    savestate_stack.append(deepcopy(dataset))
+
     if active_scene.voxel_grid is not None:
         active_scene.carve_silhouette(
             active_image, 
             keep_voxels_outside_image=keep_voxels_outside_image)
         voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
         img_selection = active_scene.next_image_name()
-
+    else:
+        if keep_voxels_outside_image == False:
+            active_scene.instanciate_voxel_grid_at_poi_fast(trigger_image=active_scene.active_image, voxel_size=0.005) #TODO add status _md, remove seen all objects button
+            voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
+            img_selection = active_scene.next_image_name()
     return voxel_image, img_selection
 
 def instanciate_voxel_grid(voxel_size):
@@ -436,6 +465,7 @@ def instanciate_voxel_grid(voxel_size):
         changed image selection for the img_selection dropdown
     """
     
+    print("instanciate_voxel_grid")
     global dataset
 
     active_scene = dataset.active_scene
@@ -443,12 +473,12 @@ def instanciate_voxel_grid(voxel_size):
                 "Background - Right click)\n")
     if active_scene.active_image.annotation_accepted is False:
         gr.Warning("Please accept the annotation first", duration=3)
-        yield gr.Button("Seen All Objects fully"), status_md, np.zeros((1,1,3)), active_scene.active_image.rgb_path.name
+        yield gr.Button("Seen All Objects fully"), status_md, gr.Image(), active_scene.active_image.rgb_path.name
     else:
         button = gr.Button(visible=False)
-        yield button, "### Instanciating Voxel Grid", np.zeros((1,1,3)), active_scene.active_image.rgb_path.name
+        yield button, "### Instanciating Voxel Grid", gr.Image(), active_scene.active_image.rgb_path.name
 
-        active_scene.instanciate_voxel_grid_at_poi(voxel_size)
+        active_scene.instanciate_voxel_grid_at_poi_with_prefiltering(voxel_size)
 
 
         image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
@@ -458,11 +488,15 @@ def show_voxel_grid():
     """
     Shows the voxel grid in a 3D viewer if it exists
     """
+
+    print("show_voxel_grid")
     global dataset
 
     active_scene = dataset.active_scene
     if active_scene.voxel_grid is not None:
         o3d.visualization.draw_geometries([active_scene.voxel_grid.o3d_grid])
+    else:
+        gr.Warning("No voxel grid to show", duration=3)
 
 def next_image():
     """
@@ -473,6 +507,8 @@ def next_image():
     str
         The name of the next image that gets set into the img_selection dropdown
     """
+
+    print("next_image")
 
     global dataset
     return  dataset.active_scene.next_image_name()
@@ -489,8 +525,9 @@ def manual_annotation_done():
         button that triggers the manual annotation done
     """
 
+    print("manual_annotation_done")
+
     global dataset
-    global predictor
 
     active_scene = dataset.active_scene
 
@@ -505,6 +542,84 @@ def manual_annotation_done():
     active_scene.active_image.generate_auto_prompts(active_scene, predictor)
     
     yield status_md, gr.Button(visible=False), active_scene.active_image.generate_visualization()
+
+def restore_savestate():  #TODO handle manual annotation done
+    """
+    Restores the application to the previous state. This function is called when the user wants to undo their last action. It updates the dataset to the previous state and updates the visibility of various components in the application.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the updated scene ID, image path, annotation objects selection, voxel image, voxel grid button, and visualization image.
+    """
+    print("restore_savestate")
+    global savestate_stack
+    global dataset
+
+    if len(savestate_stack) > 1:
+        savestate = savestate_stack.pop()
+        dataset = deepcopy(savestate)
+    elif len(savestate_stack) == 1:
+        gr.Info("Last restore point", duration=1)
+        savestate = savestate_stack[0]
+    else:
+        gr.Info("No restore points", duration=1)
+
+    voxel_image, instanciate_voxel_grid_btn = get_voxel_image_and_button(dataset)
+    annotation_objects_selection = get_annotation_objects_selection(dataset)
+
+    return (
+        dataset.active_scene.scene_id, 
+        dataset.active_scene.active_image.rgb_path.name, 
+        annotation_objects_selection, 
+        voxel_image,
+        instanciate_voxel_grid_btn,
+        dataset.active_scene.active_image.generate_visualization()
+    )
+
+def get_voxel_image_and_button(dataset):
+    """
+    Generates the voxel image and voxel grid button based on the current state of the dataset.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        The current dataset.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the voxel image and voxel grid button.
+    """
+    if dataset.active_scene.voxel_grid is not None:
+        voxel_image = dataset.active_scene.voxel_grid.get_voxel_grid_top_down_view()
+        instanciate_voxel_grid_btn = gr.Button(visible=False)
+    else:
+        voxel_image = gr.Image(None)
+        instanciate_voxel_grid_btn = gr.Button("Seen All Objects fully", visible=True)
+    return voxel_image, instanciate_voxel_grid_btn
+
+def get_annotation_objects_selection(dataset):
+    """
+    Generates the annotation objects selection based on the current state of the dataset.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        The current dataset.
+
+    Returns
+    -------
+    gr.Radio
+        The annotation objects selection radio button.
+    """
+    if dataset.active_scene.active_image.active_object is not None:
+        radio_options = [obj.label for obj in dataset.active_scene.active_image.annotation_objects.values()]
+        default_value = dataset.active_scene.active_image.active_object.label
+    else:
+        radio_options = []
+        default_value = None
+    return gr.Radio(label="Select Object", choices=radio_options, value=default_value)
 
 def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     global dataset
@@ -524,12 +639,15 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
             scene_selection = gr.Dropdown(
                 choices = dataset.get_scene_ids(),
                 label = "Select a Scene",
+                scale = 2
             )
             img_selection = gr.Dropdown(
                 choices = [],
                 label = "Select an Image",
+                scale = 2
             )
-            next_img_btn = gr.Button("Next Image")
+            next_img_btn = gr.Button("Next Image", scale=2)
+            undo_btn = gr.Button("Undo", scale=1)
 
         with gr.Row():
             with gr.Column(scale=8) as object_library_menu_col:
@@ -598,7 +716,7 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
         annotation_object_dropdown.select(
             add_object, 
             [annotation_object_dropdown], 
-            [status_md, annotation_objects_selection])
+            [status_md, annotation_objects_selection, annotation_object_dropdown])
         
         annotation_objects_selection.change(
             change_annotation_object, 
@@ -635,17 +753,21 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
             manual_annotation_done, 
             outputs=[status_md, manual_annotation_done_btn, prompting_image])
 
-        
-        #TODO add a undo button, 
-        # only generate auto prompt for next image, 
+        undo_btn.click(
+            restore_savestate,
+            outputs=[scene_selection, img_selection, annotation_objects_selection, voxel_image, seen_all_objects_btn, prompting_image]
+        )
+
+        #TODO
+        # Accept all objects in view -> no prefiltering needed -> automatically instanicate voxel grid
         # save existing votes -> only calcuate votes for nexxt image, (votes+confidence+total number of votes) -> calculate majority voting from that information
         # dont to filtering every time, 
         # (differenciate between background and not seen voxels in voting) -> remove background keep unseen, 
+
         # write complete scene to bop format.
+
         # check for the mask size of each object in auto prompting -> the ones with big masks are pronably wrong(detect background)
-
-
-        # accept_object_library_btn.click(
+        # TODO dictionary returns -> we only need to return the stuff we want to update
     demo.queue()
     demo.launch()
     
