@@ -16,13 +16,14 @@ class AnnotationObject:
     scene_object_id: str
 
 class AnnotationImage:
-    def __init__(self, rgb_path, camera_pose, rigid_segmap=None):
+    def __init__(self, rgb_path, camera_pose, scene, rigid_segmap=None):
         self.rgb_path = rgb_path
         self.camera_pose = camera_pose
         self.annotation_objects = {}
         self.segmap= rigid_segmap
         self.active_object = None
         self.annotation_accepted = False
+        self.scene = scene
 
     def erase_prompt(self, input_point, predictor):
         # find closest prompt point in active image
@@ -233,9 +234,10 @@ class AnnotationImage:
 
         overlay = image.copy()
 
-        light_blue = (73, 116, 130)
+        light_blue =  (22,133,248)
         light_red = (155, 82, 93)
-
+        alpha = 1 - self.scene.visualization_opacity
+        beta = self.scene.visualization_opacity
         for prompt_obj in self.annotation_objects.values():
             if prompt_obj.mask is None:
                 continue
@@ -243,21 +245,27 @@ class AnnotationImage:
             if prompt_obj == self.active_object:
                 color = light_blue
             mask = prompt_obj.mask.astype(np.uint8)
-
+            mask = mask>0
             colored_mask = np.zeros_like(image)
             colored_mask[mask > 0] = color
+            overlay[mask] = cv2.addWeighted(overlay, alpha, colored_mask, beta, 0)[mask]
 
-            overlay = cv2.addWeighted(overlay, 1, colored_mask, 0.5, 0)
-
+        alpha = 1- self.scene.visualization_opacity**(1/1.5)
+        beta = self.scene.visualization_opacity**(1/1.5)
         for prompt_obj in self.annotation_objects.values():       
             if prompt_obj.mask is None:
                 continue     
             color = (255, 0, 0)
+            # color = light_red
             if prompt_obj == self.active_object:
                 color = (0, 0, 255)
+                # color = light_blue 
 
             contours, _ = cv2.findContours(prompt_obj.mask.astype(np.uint8), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(overlay, contours, -1, color, 2)
+            black = np.zeros_like(image)
+            black = cv2.drawContours(black, contours, -1, color, 2)
+            mask = (black > 0).any(axis=-1) 
+            overlay[mask] = cv2.addWeighted(overlay, alpha, black, beta, 0)[mask]
 
         for (x, y), label in zip(self.active_object.prompts, self.active_object.prompts_label):
             dot_color = (0, 255, 0) if label == 1 else (255, 0, 0)

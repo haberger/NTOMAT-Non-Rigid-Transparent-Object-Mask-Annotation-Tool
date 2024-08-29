@@ -257,8 +257,6 @@ def change_image(img_selection, object_selection):
     image = cv2.cvtColor(cv2.imread(prompt_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
     predictor.set_image(image)
 
-
-
     if object_selection is not None:
         prompt_image.active_object = prompt_image.annotation_objects[object_selection]
 
@@ -336,6 +334,12 @@ def change_annotation_object(annotation_objects_selection):
     image = prompt_image.generate_visualization()
     return image
 
+def change_opacity(opacity):
+    global dataset
+    
+    dataset.active_scene.visualization_opacity = opacity
+    return dataset.active_scene.active_image.generate_visualization() 
+
 def click_image():
     """
     This function just exists so the curser change gets triggered by gradio when hivering over the image.
@@ -398,7 +402,7 @@ def js_trigger(input_data, image, annotation_objects_selection, eraser):
 
     return -1, active_image.generate_visualization()
 
-def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
+def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection, voxel_size):
     """
     Accept the annotation for the current image, and carve the voxel grid to the silhouette of the image
     depending on the keep_voxels_outside_image parameter
@@ -431,6 +435,9 @@ def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
 
     savestate_stack.append(deepcopy(dataset))
 
+    status_md = ("### Click on the image to add prompts (Foreground - Left click, "
+                "Background - Right click)\n")
+    
     if active_scene.voxel_grid is not None:
         active_scene.carve_silhouette(
             active_image, 
@@ -439,10 +446,13 @@ def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection):
         img_selection = active_scene.next_image_name()
     else:
         if keep_voxels_outside_image == False:
-            active_scene.instanciate_voxel_grid_at_poi_fast(trigger_image=active_scene.active_image, voxel_size=0.005) #TODO add status _md, remove seen all objects button
+            yield "### Instanciating VoxelGrid", gr.Image(), img_selection, gr.Button(visible=False)
+            active_scene.instanciate_voxel_grid_at_poi_fast(trigger_image=active_scene.active_image, voxel_size=voxel_size)
             voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
             img_selection = active_scene.next_image_name()
-    return voxel_image, img_selection
+            yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=True)
+    yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=True)
+
 
 def instanciate_voxel_grid(voxel_size):
     """
@@ -494,7 +504,7 @@ def show_voxel_grid():
 
     active_scene = dataset.active_scene
     if active_scene.voxel_grid is not None:
-        o3d.visualization.draw_geometries([active_scene.voxel_grid.o3d_grid])
+        active_scene.voxel_grid.show()
     else:
         gr.Warning("No voxel grid to show", duration=3)
 
@@ -539,9 +549,20 @@ def manual_annotation_done():
     status_md = ("### Click on the image to add prompts (Foreground - Left click, "
             "Background - Right click), or erase existing prompts\n")
     
+
+
     active_scene.active_image.generate_auto_prompts(active_scene, predictor)
     
-    yield status_md, gr.Button(visible=False), active_scene.active_image.generate_visualization()
+    yield status_md, gr.Button("Reidentify Voxels in scene", visible=False), active_scene.active_image.generate_visualization()
+
+def write_to_bop():
+
+    #check if all images have been annotated
+    for img in dataset.active_scene.annotation_images.values():
+        if img.annotation_accepted == False:
+            gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
+            return
+    return
 
 def restore_savestate():  #TODO handle manual annotation done
     """
@@ -674,6 +695,8 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
                     label="Object you want to annotate")
                 
                 annotation_objects_selection = gr.Radio(label="Select Object")
+                opacity_slider = gr.Slider(label="Visualization_Opacity", minimum=0, maximum=1, step=0.1, value=0.5)
+
                 seen_all_objects_btn = gr.Button("Seen All Objects fully")
 
                 with gr.Row():
@@ -685,6 +708,7 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
                 voxel_image = gr.Image(label="Voxel Grid", interactive=False)
                 show_grid_btn = gr.Button("Show Voxel Grid")
                 manual_annotation_done_btn = gr.Button("Manual Annotation Done")
+                write_to_bop_btn = gr.Button("Write to BOP")
                 eraser_checkbox = gr.Checkbox(label="erase prompts")
                 
         add_object_to_library_btn.click(
@@ -723,6 +747,11 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
             [annotation_objects_selection], 
             [prompting_image])
         
+        opacity_slider.change(
+            change_opacity,
+            [opacity_slider],
+            [prompting_image])
+
         prompting_image.select(
             click_image)
         
@@ -733,12 +762,14 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
         
         accept_annotation_btn.click(
             accept_annotation, 
-            [voxel_image, gr.State(True), img_selection], 
-            [voxel_image, img_selection])
+            [voxel_image, gr.State(True), img_selection, gr.State(voxel_size)], 
+            [status_md, voxel_image, img_selection, seen_all_objects_btn],
+            trigger_mode='once')
         accept_annotation_all_in_view_btn.click(
             accept_annotation, 
-            [voxel_image, gr.State(False), img_selection], 
-            [voxel_image, img_selection])
+            [voxel_image, gr.State(False), img_selection, gr.State(voxel_size)], 
+            [status_md, voxel_image, img_selection, seen_all_objects_btn],
+            trigger_mode='once')
 
         seen_all_objects_btn.click(
             instanciate_voxel_grid,
@@ -753,17 +784,26 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
             manual_annotation_done, 
             outputs=[status_md, manual_annotation_done_btn, prompting_image])
 
+        write_to_bop_btn.click(
+            write_to_bop)
+
         undo_btn.click(
             restore_savestate,
             outputs=[scene_selection, img_selection, annotation_objects_selection, voxel_image, seen_all_objects_btn, prompting_image]
         )
 
         #TODO
-        # Accept all objects in view -> no prefiltering needed -> automatically instanicate voxel grid
+        #make filterin a bit more restrictive -> finetune
+        #add button to reidentify voxels in scene -> if manual annotation done -> should be ready to test
+        #add opacity slider fox masks in voxel grid -> seems to work
+        #to scene writing -> 
+        #fix eraser bug
+        #fix seen all objects fully bug
+
         # save existing votes -> only calcuate votes for nexxt image, (votes+confidence+total number of votes) -> calculate majority voting from that information
         # dont to filtering every time, 
-        # (differenciate between background and not seen voxels in voting) -> remove background keep unseen, 
 
+        # (differenciate between background and not seen voxels in voting) -> remove background keep unseen, 
         # write complete scene to bop format.
 
         # check for the mask size of each object in auto prompting -> the ones with big masks are pronably wrong(detect background)
@@ -784,7 +824,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-v',
         dest='voxel_size',
-        default=0.005,
+        default=0.004,
         help='voxel_size')
 
     args = parser.parse_args()

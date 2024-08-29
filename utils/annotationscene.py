@@ -26,6 +26,7 @@ class AnnotationScene:
         self.scene_object_ids = None
 
         self.manual_annotation_done = False
+        self.visualization_opacity = 0.5
 
     def load_scene_data(self):
         self.poi = self.get_cameras_point_of_interest()
@@ -96,6 +97,7 @@ class AnnotationScene:
             object_name = f"{object_name.rpartition('_')[0]}_{i}"
 
         scene_object_id = max(self.scene_object_ids)+1
+        self.scene_object_ids.append(scene_object_id)
 
         for anno_image in self.annotation_images.values():
 
@@ -163,7 +165,7 @@ class AnnotationScene:
 
         for i in reordering:
             image_path = Path(image_paths[i])
-            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], rigit_segmaps[i])
+            self.annotation_images[image_path.name] = AnnotationImage(image_path, camera_poses[i], self, rigit_segmaps[i])
 
     def get_rigit_segmaps(self):
         # read in all scene masks

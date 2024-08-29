@@ -1,12 +1,12 @@
-import open3d as o3d
 import numpy as np
 from copy import deepcopy
 import time
 import pickle
 import cv2
+import os
 from scipy.ndimage import generic_filter
+import open3d as o3d
 
-o3d.visualization.rendering.OffscreenRenderer.__deepcopy__ = lambda self, memo: self
 class VoxelGrid:
     def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None, img_width=500, img_height=500):
         self.width = width
@@ -16,8 +16,6 @@ class VoxelGrid:
         self.origin = origin
         self.color = color
         self.o3d_grid_id = None
-        self.top_down_renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
-        self.projection_renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
         if width is not None and height is not None and depth is not None:
             self.o3d_grid = self.generate_colored_voxelgrid(voxel_size, origin, height, width, depth)
         else:
@@ -89,10 +87,20 @@ class VoxelGrid:
             self.o3d_grid.add_voxel(voxel)
 
         return self
+    
+    def show(self, voxel_grid=None):
+        if voxel_grid is None:
+            voxel_grid = self.o3d_grid
+        voxel_grid_visualizer = o3d.visualization.Visualizer()
+
+        voxel_grid_visualizer.create_window()
+        voxel_grid_visualizer.add_geometry(voxel_grid)
+        voxel_grid_visualizer.run() 
+
+        voxel_grid_visualizer.destroy_window()
 
     def get_voxel_grid_top_down_view(self, z=1):
-
-        self.top_down_renderer.scene.clear_geometry()
+        top_down_renderer = o3d.visualization.rendering.OffscreenRenderer(500, 500)
 
         poi = [self.origin[0] + self.width/2, self.origin[1] + self.height/2, self.origin[2] + self.depth/2]
 
@@ -100,7 +108,7 @@ class VoxelGrid:
         mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
         mtl.shader = "defaultUnlit"
 
-        self.top_down_renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
+        top_down_renderer.scene.add_geometry("grid", self.o3d_grid, mtl)
 
         intrinsics = o3d.camera.PinholeCameraIntrinsic(500, 500, 250, 250, 250, 250)
         #extrensics: translation 2 meters above self.poi in z. Looking down
@@ -114,36 +122,41 @@ class VoxelGrid:
 
         extrinsics = np.linalg.inv(pose)
 
-        self.top_down_renderer.setup_camera(intrinsics, extrinsics)
-        img = np.asarray(self.top_down_renderer.render_to_image())
+        top_down_renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(top_down_renderer.render_to_image())
         return img
     
+
     def identify_voxels_in_scene(self, scene):
-        start_time = time.time()
+        print("Starting voxel identification...")
+
+        # Initialize camera intrinsics
         intrinsics = o3d.camera.PinholeCameraIntrinsic(
-            scene.img_width, 
-            scene.img_height, 
-            scene.camera_intrinsics[0, 0], 
-            scene.camera_intrinsics[1, 1], 
-            scene.camera_intrinsics[0, 2], 
-            scene.camera_intrinsics[1, 2])
+            scene.img_width,
+            scene.img_height,
+            scene.camera_intrinsics[0, 0],
+            scene.camera_intrinsics[1, 1],
+            scene.camera_intrinsics[0, 2],
+            scene.camera_intrinsics[1, 2]
+        )
+        # Initialize visualizer
         vis = o3d.visualization.Visualizer()
 
-        voxel_correspondences = {tuple(voxel.grid_index): [] for voxel in self.o3d_grid.get_voxels()}
-        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
+        num_ids = max(scene.scene_object_ids)+1
 
-        #iterate over all images that have accepted annotations
-        for image in scene.annotation_images.values():
+        # Set of voxels
+        voxel_correspondences_global = {tuple(voxel.grid_index): np.zeros(num_ids, dtype=int) for voxel in self.o3d_grid.get_voxels()}
+
+        # Process each annotation image
+        for img_idx, image in enumerate(scene.annotation_images.values()):
             if not image.annotation_accepted:
                 continue
 
-            print("calculating correspondences for image")
 
-            start_time = time.time()
-            # get camera pose
+            # Get camera pose
             pose = image.camera_pose
 
-            #project voxel grid into image space
+            # Project voxel grid into image space
             vis.create_window(width=scene.img_width, height=scene.img_height, visible=False)
             vis.add_geometry(self.o3d_grid)
             view_control = vis.get_view_control()
@@ -151,112 +164,61 @@ class VoxelGrid:
             param.intrinsic = intrinsics
             param.extrinsic = np.linalg.inv(pose.tf)
             view_control.convert_from_pinhole_camera_parameters(param, True)
-            #define background color
             vis.get_render_option().background_color = np.array([0, 0, 0])
             vis.poll_events()
             vis.update_renderer()
             rgb = vis.capture_screen_float_buffer(True)
             vis.destroy_window()
 
-            print(f"projection time: {time.time()-start_time}")
-
-            start_time = time.time()
+            # Convert and scale grid positions
             grid_position = np.array(rgb)
-            grid_position[:,:,0] = grid_position[:,:,0] * (self.width/self.voxel_size)
-            grid_position[:,:,1] = grid_position[:,:,1] * (self.height/self.voxel_size)
-            grid_position[:,:,2] = grid_position[:,:,2] * (self.depth/self.voxel_size)
+            grid_position *= np.array([self.width/self.voxel_size, self.height/self.voxel_size, self.depth/self.voxel_size])
             grid_position = np.round(grid_position).astype(np.int32)
 
-            loop_start_time = time.time()
+            # Remove background pixels and update voxel correspondences
+            valid_positions_mask = (grid_position != (0, 0, 0)).all(axis=-1)
+            valid_grid_positions = grid_position[valid_positions_mask]
+            valid_ids = image.get_complete_segmap()[valid_positions_mask]
+            for pos, voxel_id in zip(valid_grid_positions, valid_ids):
+                pos_tuple = tuple(pos)
+                if pos_tuple in voxel_correspondences_global:
+                    voxel_correspondences_global[pos_tuple][voxel_id] += 1
 
-            valid_positions = (grid_position != (0, 0, 0)).all(axis=-1)
-
-            valid_positions_flat = valid_positions.ravel()
-            combined_mask = valid_positions_flat
-
-            valid_grid_positions = grid_position.reshape(-1, 3)[combined_mask]
-            valid_ids = image.get_complete_segmap().ravel()[combined_mask]
-
-            for pos, id in zip(map(tuple, valid_grid_positions), valid_ids):
-                if pos in voxel_correspondences:
-                    voxel_correspondences[pos].append(id)
-
-            print(f"Time taken for loop: {time.time() - loop_start_time:.2f} seconds")
-
-        print("majority voting")
-        start_time = time.time()
-        for position, votes in voxel_correspondences.items():
-            if len(votes) == 0:
-                continue
-            unique, counts = np.unique(votes, return_counts=True)
-
-            if len(unique) == 1:
-                majority_vote = unique[0]
-                voxel_correspondences[position] = majority_vote
-                continue
-
-            #sort unique and counts decreasing
-            sorted_idx = np.argsort(-counts)
-            unique = unique[sorted_idx]
-            counts = counts[sorted_idx]
-            if counts[0] == 0:
-                majority_vote = unique[0] if counts[0]/counts[1] > 4 else unique[1]
-            elif counts[1] == 0:
-                majority_vote = unique[0] if counts[0]/counts[1] > 1.5 else 0
-            else:
-                majority_vote = unique[0] if counts[0]/counts[1] > 2 else 0
-            voxel_correspondences[position] = majority_vote
-        print(f"Time taken for majority voting: {time.time() - start_time:.2f} seconds")
-
-        start_time = time.time()
+        # Deepcopy the grid for coloring
         colored_voxel_grid = deepcopy(self.o3d_grid)
-        voxel_indices = [voxel.grid_index for voxel in colored_voxel_grid.get_voxels()]
-        for voxel_index in voxel_indices:
-            colored_voxel_grid.remove_voxel(voxel_index)
-            if tuple(voxel_index) in voxel_correspondences:
-                object_id = voxel_correspondences[tuple(voxel_index)]
-                if object_id == []:
-                    continue
-                if object_id == 0:
-                    continue
-                else:
-                    voxelcolor = [(1/255)*object_id, (1/255)*object_id, (1/255)*object_id]
-            else:
-                voxelcolor = [0, 0, 0]    
-            voxel = o3d.geometry.Voxel(voxel_index, voxelcolor)
-            colored_voxel_grid.add_voxel(voxel)
-        self.o3d_grid_id = colored_voxel_grid
-        print(f"Time taken for colored voxel grid setup: {time.time() - start_time:.2f} seconds")
 
-        start_time = time.time()
-        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)), dtype=np.uint32)
-        for position, vote in voxel_correspondences.items():
-            if type(vote) == list:
+        # Remove all voxels from the new grid
+        for voxel in colored_voxel_grid.get_voxels():
+            colored_voxel_grid.remove_voxel(voxel.grid_index)
+
+        # Filter and add colored voxels to the new grid
+        for key, value in voxel_correspondences_global.items():
+            if (value == 0).all():
                 continue
-            voxel_grid[position] = vote
-        print(f"Time taken for voxel grid setup: {time.time() - start_time:.2f} seconds")
+            sorted_ids = np.argsort(value)[::-1]
+            if sorted_ids[0] != 0:
+                if sorted_ids[1] == 0 and sorted_ids[0] > sorted_ids[1]*1.5:
+                    voxel = o3d.geometry.Voxel(key, [sorted_ids[0] / 255] * 3)
+                    colored_voxel_grid.add_voxel(voxel)
+                elif sorted_ids[1] != 0 and sorted_ids[0] > sorted_ids[1]*3:
+                    voxel = o3d.geometry.Voxel(key, [sorted_ids[0] / 255] * 3)
+                    colored_voxel_grid.add_voxel(voxel)
+                    
 
-        def filter_voxels(data, kernel_size=3):
-            def has_two_neighbors(values):
-                center_value = values[len(values) // 2]  # Center of the kernel
-                count = np.sum(values == center_value) - 1  # Exclude the center itself
-                return center_value if count >= 1 else 0
-
-            start_time = time.time()
-            filtered_data = generic_filter(data, has_two_neighbors, size=kernel_size, mode='constant', cval=0)
-            changed_voxels = data != filtered_data
-            changed_indices = np.argwhere(changed_voxels)
-            print(f"Time taken for voxel filtering: {time.time() - start_time:.2f} seconds")
-            return filtered_data, changed_indices
-
-        start_time = time.time()
-        voxel_grid, changed_indices = filter_voxels(voxel_grid, kernel_size=3)
-        print(f"Time taken for voxel grid filtering: {time.time() - start_time:.2f} seconds")
-
-        start_time = time.time()
-        for index in changed_indices:
-            self.o3d_grid_id.remove_voxel(index)
-        print(f"Time taken for removing voxels: {time.time() - start_time:.2f} seconds")
+        # Filter out noise voxels
+        for voxel in colored_voxel_grid.get_voxels():
+            grid_index = tuple(voxel.grid_index)
+            count = sum(
+                np.argmax(voxel_correspondences_global.get((grid_index[0]+i, grid_index[1]+j, grid_index[2]+k), np.zeros(num_ids, dtype=int))) 
+                == np.argmax(voxel_correspondences_global[grid_index])
+                for i in range(-1, 2)
+                for j in range(-1, 2)
+                for k in range(-1, 2)
+                if not (i == j == k == 0)
+            )
+            if count < 2:
+                colored_voxel_grid.remove_voxel(grid_index)
+        self.o3d_grid_id = colored_voxel_grid
     
     def visualize_colored_meshes(self, meshes):
         def get_random_color():
@@ -274,17 +236,17 @@ class VoxelGrid:
         vis.destroy_window()
 
     def project_voxelgrid(self, img_width, img_height, intrinsics, cam_pose=None, voxelgrid=None):
+        projection_renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
 
-        self.projection_renderer.scene.clear_geometry()
-        self.projection_renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
-        self.projection_renderer.scene.view.set_post_processing(False)
+        projection_renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
+        projection_renderer.scene.view.set_post_processing(False)
 
         mtl = o3d.visualization.rendering.MaterialRecord()
         # mtl.base_color = [1.0, 1.0, 1.0, 1.0]  # RGBA, does not replace the mesh color
         mtl.shader = "defaultUnlit"
 
-        self.projection_renderer.scene.clear_geometry()
-        self.projection_renderer.scene.add_geometry("grid", voxelgrid, mtl)
+        projection_renderer.scene.clear_geometry()
+        projection_renderer.scene.add_geometry("grid", voxelgrid, mtl)
 
         intrinsics = o3d.camera.PinholeCameraIntrinsic(img_width, img_height, intrinsics[0, 0], intrinsics[1, 1], intrinsics[0, 2], intrinsics[1, 2])
         #extrensics: translation 2 meters above self.poi in z. Looking down
@@ -292,9 +254,12 @@ class VoxelGrid:
         pose = cam_pose
         extrinsics = np.linalg.inv(pose.tf)
 
-        self.projection_renderer.setup_camera(intrinsics, extrinsics)
-        img = np.asarray(self.projection_renderer.render_to_image()).astype(np.uint8)
+        projection_renderer.setup_camera(intrinsics, extrinsics)
+        img = np.asarray(projection_renderer.render_to_image()).astype(np.uint8)
 
+        cv2.imshow("img", img*10)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
         return img
     
