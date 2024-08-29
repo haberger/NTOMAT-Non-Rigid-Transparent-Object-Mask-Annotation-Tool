@@ -138,10 +138,10 @@ def update_object_library(id, object_name, object_description, obj_library_df):
 
     if id in obj_library_df['id'].values:
         gr.Warning("ID already exists", duration=3)
-        return obj_library_df
+        return gr.Dataframe()
     elif id in [None, ""] or object_name in [None, ""] or object_description in [None, ""]:
         gr.Warning("Please fill all textboxes", duration=3)
-        return obj_library_df
+        return gr.DataFrame()
 
     new_row = pd.DataFrame({
         "id": id, 
@@ -182,8 +182,8 @@ def load_scene(scene_id):
 
     yield (
         f"### Loading Scene {scene_id}:",
-        None,
-        annotation_objects_selection)
+        gr.Dropdown(),
+        gr.Radio())
     
     scene = dataset.annotation_scenes[scene_id]
     scene.load_scene_data()
@@ -192,15 +192,15 @@ def load_scene(scene_id):
         gr.Warning(f"Missing masks for scene {scene_id} generating new masks", duration=3)
         yield (
             f"### Loading Scene {scene_id}: Generating missing masks",
-            None,
-            annotation_objects_selection)
+            gr.Dropdown(),
+            gr.Radio())
         scene.generate_masks()
 
 
     yield (
         f"### Loading Scene {scene_id}: Loading Images",
-        None,
-        annotation_objects_selection)
+        gr.Dropdown(),
+        gr.Radio())
     
     scene.load_images()
     rgb_imgs = scene.annotation_images.keys()
@@ -326,7 +326,8 @@ def change_annotation_object(annotation_objects_selection):
     global dataset
 
     if annotation_objects_selection is None:
-        return dataset.active_scene.active_image.generate_visualization()
+        return gr.Image()
+        # return dataset.active_scene.active_image.generate_visualization()
     prompt_image = dataset.active_scene.active_image
 
     prompt_image.active_object = prompt_image.annotation_objects[annotation_objects_selection]
@@ -349,7 +350,7 @@ def click_image():
     print("click_image")
     return
 
-def js_trigger(input_data, image, annotation_objects_selection, eraser):
+def js_trigger(input_data, annotation_objects_selection, eraser):
     """
     This function is triggered by a javascript event when the user clicks on the image. 
     It adds a prompt to the image at the clicked location, or erases a prompt if the eraser checkbox is checked.
@@ -381,7 +382,7 @@ def js_trigger(input_data, image, annotation_objects_selection, eraser):
 
     if annotation_objects_selection is None:
         gr.Warning("Please add an object to annotate first", duration=3)
-        return -1, image
+        return -1, gr.Image()
 
     data = dict(zip(["x", "y", "button", "imgWidth", "imgHeight"], input_data.split()))
 
@@ -541,7 +542,7 @@ def manual_annotation_done():
 
     active_scene = dataset.active_scene
 
-    yield "### Identifying Voxels in Scene", gr.Button(visible=False), active_scene.active_image.generate_visualization()
+    yield "### Identifying Voxels in Scene", gr.Button(visible=False), gr.Image()
 
     active_scene.voxel_grid.identify_voxels_in_scene(active_scene)
     active_scene.manual_annotation_done = True
@@ -553,7 +554,7 @@ def manual_annotation_done():
 
     active_scene.active_image.generate_auto_prompts(active_scene, predictor)
     
-    yield status_md, gr.Button("Reidentify Voxels in scene", visible=False), active_scene.active_image.generate_visualization()
+    yield status_md, gr.Button("Reidentify Voxels in scene", visible=True), active_scene.active_image.generate_visualization()
 
 def write_to_bop():
 
@@ -735,30 +736,35 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
         img_selection.change(
             change_image, 
             inputs=[img_selection, annotation_objects_selection], 
-            outputs=[prompting_image])
+            outputs=[prompting_image],
+            show_progress='minimal')
         
         annotation_object_dropdown.select(
             add_object, 
             [annotation_object_dropdown], 
-            [status_md, annotation_objects_selection, annotation_object_dropdown])
+            [status_md, annotation_objects_selection, annotation_object_dropdown],
+            show_progress='hidden')
         
         annotation_objects_selection.change(
             change_annotation_object, 
             [annotation_objects_selection], 
-            [prompting_image])
+            [prompting_image],
+            show_progress='minimal')
         
         opacity_slider.change(
             change_opacity,
             [opacity_slider],
-            [prompting_image])
+            [prompting_image],
+            show_progress='hidden')
 
         prompting_image.select(
             click_image)
         
         js_parser.input(
             js_trigger, 
-            [js_parser, prompting_image, annotation_objects_selection, eraser_checkbox], 
-            [js_parser, prompting_image])
+            [js_parser, annotation_objects_selection, eraser_checkbox], 
+            [js_parser, prompting_image],
+            show_progress='minimal')
         
         accept_annotation_btn.click(
             accept_annotation, 
