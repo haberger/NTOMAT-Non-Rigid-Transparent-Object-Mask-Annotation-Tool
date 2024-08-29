@@ -440,3 +440,16 @@ class AnnotationScene:
         indx = list(rgb_imgs).index(active_image)
         new_selection = list(rgb_imgs)[indx+1]
         return new_selection
+    
+    def write_to_bop(path):
+        import os
+        print(path)
+        print(os.listdir(path))
+        
+        # enumerate_find index_write to bop
+        # substract anno masks for occlusion
+        # estimate mask from voxelgrid
+        # calc centerpoint of voxelgrid for translation
+        # np. eye for rotation
+        # append poses
+        # convert to coco

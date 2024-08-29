@@ -3,6 +3,7 @@ from utils.annotationscene import AnnotationScene
 import yaml
 import pandas as pd
 import os
+import utils.write_3ddat_to_bop as bop_writer
 
 class AnnotationDataset:
     def __init__(self, dataset_path, config="config.cfg"):
@@ -60,3 +61,15 @@ class AnnotationDataset:
         except ValueError as e:
             print(e)
             return None
+        
+    def instanciate_bop_dataset(self, output_path):
+        scene_file_reader = self.scene_reader
+        # scene_ids = scene_file_reader.get_scene_ids()
+        object_lib = scene_file_reader.get_object_library()
+    
+        OBJ_3D_DAT_TO_BOP_ID = {
+        obj_id: int(obj.mesh.file.split('/')[-1][4:-4])
+        for obj_id, obj in object_lib.items()
+        }
+
+        bop_writer.save_model_information(output_path, OBJ_3D_DAT_TO_BOP_ID, object_lib)

@@ -556,13 +556,20 @@ def manual_annotation_done():
     
     yield status_md, gr.Button("Reidentify Voxels in scene", visible=True), active_scene.active_image.generate_visualization()
 
-def write_to_bop():
+def write_to_bop(output_path):
 
-    #check if all images have been annotated
-    for img in dataset.active_scene.annotation_images.values():
-        if img.annotation_accepted == False:
-            gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
-            return
+    # #check if all images have been annotated
+    # for img in dataset.active_scene.annotation_images.values():
+    #     if img.annotation_accepted == False:
+    #         gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
+    #         return
+        
+    
+    # get scene index
+    scene_index = dataset.annotation_scenes.index(dataset.active_scene)
+
+    dataset.active_scene.write_to_bop(output_path/scene_index)
+
     return
 
 def restore_savestate():  #TODO handle manual annotation done
@@ -643,11 +650,12 @@ def get_annotation_objects_selection(dataset):
         default_value = None
     return gr.Radio(label="Select Object", choices=radio_options, value=default_value)
 
-def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
+def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     global dataset
     global predictor
 
     dataset = AnnotationDataset(dataset_path)
+    dataset.instanciate_bop_dataset(output_path)
     load_predictor(checkpoint_path, model_type, device)
 
     with gr.Blocks(head=js_events, fill_height=True) as demo:
@@ -791,7 +799,7 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
             outputs=[status_md, manual_annotation_done_btn, prompting_image])
 
         write_to_bop_btn.click(
-            write_to_bop)
+            write_to_bop(gr.State(output_path)))
 
         undo_btn.click(
             restore_savestate,
@@ -802,6 +810,12 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
         #make filterin a bit more restrictive -> finetune
         #add button to reidentify voxels in scene -> if manual annotation done -> should be ready to test
         #add opacity slider fox masks in voxel grid -> seems to work
+        # TODO dictionary returns -> we only need to return the stuff we want to update
+
+
+
+
+
         #to scene writing -> 
         #fix eraser bug
         #fix seen all objects fully bug
@@ -813,7 +827,7 @@ def main(dataset_path, voxel_size, checkpoint_path="model_checkpoints/sam_vit_h_
         # write complete scene to bop format.
 
         # check for the mask size of each object in auto prompting -> the ones with big masks are pronably wrong(detect background)
-        # TODO dictionary returns -> we only need to return the stuff we want to update
+        #TODO Flip
     demo.queue()
     demo.launch()
     
@@ -833,6 +847,13 @@ if __name__ == "__main__":
         default=0.004,
         help='voxel_size')
 
+    parser.add_argument(
+        '-o',
+        dest='output_path',
+        default = '../output2',
+        help='path_to_output'
+    )
+
     args = parser.parse_args()
 
-    main(Path(args.dataset_path), voxel_size=float(args.voxel_size))
+    main(Path(args.dataset_path), voxel_size=float(args.voxel_size), output_path=Path(args.output_path))
