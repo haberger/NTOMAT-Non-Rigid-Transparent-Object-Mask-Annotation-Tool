@@ -3,9 +3,8 @@ from copy import deepcopy
 import time
 import pickle
 import cv2
-import os
-from scipy.ndimage import generic_filter
 import open3d as o3d
+import mcubes
 
 class VoxelGrid:
     def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None, img_width=500, img_height=500):
@@ -310,3 +309,70 @@ class VoxelGrid:
         print(f"Time taken for voxel grid creation: {time.time() - start_time:.2f} seconds")
 
         return voxel_grid
+    
+    def convert_voxel_grid_to_mesh(self, ids=[]):
+
+        # for ever id in ids create a voxelgrid
+        # get voxels from id voxel grid
+        # add voxel to corresponding voxel grid
+        # create mesh from each voxel_grid
+
+        voxel_grid = np.zeros((int(self.width/self.voxel_size), int(self.height/self.voxel_size), int(self.depth/self.voxel_size)))
+        voxel_grids = {k: np.copy(voxel_grid) for k in ids}
+        meshes = [] 
+        poses = []
+        for voxel in self.o3d_grid_id.get_voxels():
+            id = np.round(voxel.color[0]*255, 0).astype(int)
+            #check if key exists
+            if id in voxel_grids:
+                voxel_grids[id][voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 15
+        
+        for id, voxel_grid in voxel_grids.items():
+            vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
+            mesh = o3d.geometry.TriangleMesh()
+            vertices_transformed =  vertices * self.voxel_size + self.origin
+            mesh.vertices = o3d.utility.Vector3dVector(vertices_transformed)
+            mesh.triangles = o3d.utility.Vector3iVector(triangles)
+            o3d.visualization.draw_geometries([mesh, self.o3d_grid_id])
+            meshes.append(mesh)
+            pose = np.eye(4)
+            pose[:3, 3] = mesh.get_center()
+            poses.append(pose)
+
+        return meshes, poses
+
+
+
+        # print(voxel_grid.shape)
+        # for voxel in self.o3d_grid.get_voxels():
+        #     voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 15
+        
+        # vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
+        # print(len(vertices), len(triangles))
+        # print(vertices[0], triangles[0])
+        # mesh = o3d.geometry.TriangleMesh()
+        # mesh.vertices = o3d.utility.Vector3dVector(vertices)
+        # mesh.triangles = o3d.utility.Vector3iVector(triangles)
+        # o3d.visualization.draw_geometries([mesh])
+        # print(f"mesh center: mesh.get_center()")
+        # triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
+        # triangle_clusters = np.asarray(triangle_clusters)
+        # cluster_n_triangles = np.asarray(cluster_n_triangles)
+        # # Get unique cluster labels and corresponding triangle counts
+        # unique_labels = np.unique(triangle_clusters)
+        # print(unique_labels)
+        # # Create separate meshes for each cluster
+        # separate_meshes = []
+        # for label in unique_labels:
+        #     # Filter triangles belonging to the current cluster
+        #     cluster_triangles = np.where(triangle_clusters == label)[0]
+        #     if len(cluster_triangles) < 100:
+        #         continue
+        #     mesh_cluster = o3d.geometry.TriangleMesh(
+        #         vertices=mesh.vertices,
+        #         triangles=o3d.utility.Vector3iVector(
+        #             np.asarray(mesh.triangles)[cluster_triangles]
+        #         ),
+        #     )
+        #     separate_meshes.append(mesh_cluster)
+        # self.visualize_colored_meshes(separate_meshes)

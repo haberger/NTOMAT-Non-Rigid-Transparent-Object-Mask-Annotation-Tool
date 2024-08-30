@@ -205,7 +205,7 @@ def save_model_information(output_path, OBJ_3D_DAT_TO_BOP_ID, object_lib):
         with open(f"{output_path}/models_eval/models_info.json", 'w') as file:
             json.dump(models_info, file, indent=2)
 
-def write_scene_to_bop(output_path, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode, flip_upside_down=False, debug=False):
+def write_scene_to_bop(output_path, si, scene_id, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode, flip_upside_down=False, debug=False):
 
     # scene_path_bop = os.path.join(output_path, f"{mode}/{(si+49):06d}")
     scene_path_bop = os.path.join(output_path, f"{mode}/{(si):06d}")
@@ -221,77 +221,77 @@ def write_scene_to_bop(output_path, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mod
     sensor_depth_paths = scene_file_reader.get_images_depth_path(scene_id)
     rgb_paths = scene_file_reader.get_images_rgb_path(scene_id)
 
-    cam_intrinsics_final = deepcopy(cam_intrinsics)
-    if flip_upside_down:
-        cam_intrinsics_final.cx = cam_intrinsics_final.width - cam_intrinsics_final.cx
-        cam_intrinsics_final.cy = cam_intrinsics_final.height - cam_intrinsics_final.cy
+    # cam_intrinsics_final = deepcopy(cam_intrinsics)
+    # if flip_upside_down:
+    #     cam_intrinsics_final.cx = cam_intrinsics_final.width - cam_intrinsics_final.cx
+    #     cam_intrinsics_final.cy = cam_intrinsics_final.height - cam_intrinsics_final.cy
 
-    with open(os.path.join(output_path, "camera.json"), 'w') as file:
-        json.dump({
-            'cx': cam_intrinsics_final.cx,
-            'cy': cam_intrinsics_final.cy,
-            'fx': cam_intrinsics_final.fx,
-            'fy': cam_intrinsics_final.fy,
-            'height': cam_intrinsics_final.height,
-            'width': cam_intrinsics_final.width,
-            'depth_scale': 1.0
-        }, file, indent=2)
+    # with open(os.path.join(output_path, "camera.json"), 'w') as file:
+    #     json.dump({
+    #         'cx': cam_intrinsics_final.cx,
+    #         'cy': cam_intrinsics_final.cy,
+    #         'fx': cam_intrinsics_final.fx,
+    #         'fy': cam_intrinsics_final.fy,
+    #         'height': cam_intrinsics_final.height,
+    #         'width': cam_intrinsics_final.width,
+    #         'depth_scale': 1.0
+    #     }, file, indent=2)
 
 
     scene_cameras = dict()
     scene_gts = dict()
     scene_gts_info = dict()
 
-    scene_renderer = SceneRenderer(cam_intrinsics_final, object_poses)
-    object_renderers = [
-        SceneRenderer(cam_intrinsics_final, [(obj, obj_pose)])
-        for (obj, obj_pose) in object_poses
-    ]
+    # scene_renderer = SceneRenderer(cam_intrinsics_final, object_poses)
+    # object_renderers = [
+    #     SceneRenderer(cam_intrinsics_final, [(obj, obj_pose)])
+    #     for (obj, obj_pose) in object_poses
+    # ]
 
 
     for ii, (cam_pose_world, img_path) in enumerate(tqdm(zip(cam_poses_world_cords, rgb_paths), total=len(cam_poses_world_cords))):
-        cam_pose_world_final = deepcopy(cam_pose_world)
-        if flip_upside_down:
-            cam_pose_world_final.tf[:3, :3] = cam_pose_world_final.tf[:3, :3] @ \
-                Rotation.from_euler('z', 180, degrees=True).as_matrix()
+        # cam_pose_world_final = deepcopy(cam_pose_world)
+        # if flip_upside_down:
+        #     cam_pose_world_final.tf[:3, :3] = cam_pose_world_final.tf[:3, :3] @ \
+        #         Rotation.from_euler('z', 180, degrees=True).as_matrix()
 
-        img_id = f"{ii:06d}"
+        # img_id = f"{ii:06d}"
 
-        img = cv2.imread(img_path)
-        if flip_upside_down:
-            img = cv2.rotate(img, cv2.ROTATE_180)
+        # img = cv2.imread(img_path)
+        # if flip_upside_down:
+        #     img = cv2.rotate(img, cv2.ROTATE_180)
 
-        try:
-            depth_path = sensor_depth_paths[ii]
-            depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+        # try:
+        #     depth_path = sensor_depth_paths[ii]
+        #     depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
 
-            if flip_upside_down:
-                depth = cv2.rotate(depth, cv2.ROTATE_180)
-        except Exception as e:
-            print(e)
+        #     if flip_upside_down:
+        #         depth = cv2.rotate(depth, cv2.ROTATE_180)
+        # except Exception as e:
+        #     print(e)
 
-        cv2.imwrite(os.path.join(scene_path_bop, f"rgb/{img_id}.png"), img)
-        cv2.imwrite(os.path.join(scene_path_bop, f"depth/{img_id}.png"), depth)
+        # cv2.imwrite(os.path.join(scene_path_bop, f"rgb/{img_id}.png"), img)
+        # cv2.imwrite(os.path.join(scene_path_bop, f"depth/{img_id}.png"), depth)
 
-        # scene camera extrinsics in world coordinates and intrinsics
-        cam_R_floats = [float(v) for v in cam_pose_world_final.tf[:3, :3].reshape(-1)]
-        cam_t_floats = [float(v) * 1000 for v in cam_pose_world_final.tf[:3, 3].reshape(-1)]
+        # # scene camera extrinsics in world coordinates and intrinsics
+        # cam_R_floats = [float(v) for v in cam_pose_world_final.tf[:3, :3].reshape(-1)]
+        # cam_t_floats = [float(v) * 1000 for v in cam_pose_world_final.tf[:3, 3].reshape(-1)]
 
-        # prepare and store scene camera to bop
-        K = np.array([[cam_intrinsics_final.fx, 0, cam_intrinsics_final.cx],
-                        [0, cam_intrinsics_final.fy, cam_intrinsics_final.cy],
-                        [0, 0, 1.0]])
+        # # prepare and store scene camera to bop
+        # K = np.array([[cam_intrinsics_final.fx, 0, cam_intrinsics_final.cx],
+        #                 [0, cam_intrinsics_final.fy, cam_intrinsics_final.cy],
+        #                 [0, 0, 1.0]])
 
-        scene_cameras[str(ii)] = {"cam_K": K.reshape(-1).tolist(), "depth_scale": 1.0,
-                                            "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
+        # scene_cameras[str(ii)] = {"cam_K": K.reshape(-1).tolist(), "depth_scale": 1.0,
+        #                                     "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
 
 
-        instances = dict()
+        # instances = dict()
 
-        masks_visible = scene_renderer.render_masks(cam_pose_world_final.tf)
-        masks_all = [
-            r.render_masks(cam_pose_world_final.tf)[0] for r in object_renderers
-        ]
+        # masks_visible = scene_renderer.render_masks(cam_pose_world_final.tf)
+        # masks_all = [
+        #     r.render_masks(cam_pose_world_final.tf)[0] for r in object_renderers
+        # ]
 
         # TODO: handle training/test mode correctly
 
@@ -387,6 +387,6 @@ if __name__ == '__main__':
 
     # === Save scene informations =============================================
     for si, scene_id in enumerate(scene_ids):
-        write_scene_to_bop(args.output, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode)
+        write_scene_to_bop(args.output, si, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode)
 
 

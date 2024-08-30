@@ -8,6 +8,11 @@ from utils.voxelgrid import VoxelGrid
 import utils.vis_masks as vis_masks
 import pickle
 import time
+from utils.write_3ddat_to_bop import write_scene_to_bop
+import json
+from tqdm import tqdm 
+from utils.scenerenderer import SceneRenderer
+import trimesh
 
 class AnnotationScene:
     def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
@@ -19,6 +24,7 @@ class AnnotationScene:
         self.camera_intrinsics = camera_intrinsics
         self.img_width = img_width
         self.img_height = img_height
+        self.upside_down = False
 
         self.poi = None
         self.dataset_object_ids = None
@@ -441,15 +447,143 @@ class AnnotationScene:
         new_selection = list(rgb_imgs)[indx+1]
         return new_selection
     
-    def write_to_bop(path):
+
+    def write_bop_camera_json(self, output_path, cam_intrinsics_final):
+        with open(output_path/"camera.json", 'w') as file:
+            json.dump({
+                'cx': cam_intrinsics_final.cx,
+                'cy': cam_intrinsics_final.cy,
+                'fx': cam_intrinsics_final.fx,
+                'fy': cam_intrinsics_final.fy,
+                'height': cam_intrinsics_final.height,
+                'width': cam_intrinsics_final.width,
+                'depth_scale': 1.0
+            }, file, indent=2) 
+
+    def render_masks_vis(self, cam_intrinsics, cam_poses_world_cords, obj_meshes, obj_ids, obj_poses):
+        # scene_cameras = dict()
+        cam_intrinsics_final = deepcopy(cam_intrinsics)
+
+        scene_renderer = SceneRenderer(cam_intrinsics_final, obj_meshes, obj_ids, obj_poses)
+        masks = []
+        for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+            cam_pose_world_final = deepcopy(cam_pose_world)
+
+            # img_id = f"{ii:06d}"
+
+            # # scene camera extrinsics in world coordinates and intrinsics
+            # cam_R_floats = [float(v) for v in cam_pose_world_final.tf[:3, :3].reshape(-1)]
+            # cam_t_floats = [float(v) * 1000 for v in cam_pose_world_final.tf[:3, 3].reshape(-1)]
+
+
+#             # prepare and store scene camera to bop
+#             K = np.array([[cam_intrinsics_final.fx, 0, cam_intrinsics_final.cx],
+#                             [0, cam_intrinsics_final.fy, cam_intrinsics_final.cy],
+#                             [0, 0, 1.0]])
+            
+# # 
+#             scene_cameras[str(ii)] = {"cam_K": K.reshape(-1).tolist(), "depth_scale": 1.0,
+#                                     "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
+            masks_visible = scene_renderer.render_masks(cam_pose_world_final.tf)
+
+            masks.append(masks_visible)
+        return masks
+
+    def render_masks_all(self, cam_intrinsics, cam_poses_world_cords, obj_meshes, obj_ids, obj_poses):
+        cam_intrinsics_final = deepcopy(cam_intrinsics)
+
+        object_renderers = [
+            SceneRenderer(cam_intrinsics_final, [obj_mesh], [obj_id], [obj_pose])
+            for (obj_mesh, obj_id, obj_pose) in zip(obj_meshes, obj_ids, obj_poses)
+        ]
+
+        masks = []
+        for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+            cam_pose_world_final = deepcopy(cam_pose_world)
+            masks_all = [
+                r.render_masks(cam_pose_world_final.tf)[0] for r in object_renderers
+            ]
+            masks.append(masks_all)
+        return masks
+
+
+    def write_to_bop(self, path, mode):
         import os
         print(path)
         print(os.listdir(path))
+
+        # find which scene this is
+        scene_ids = self.scene_reader.get_scene_ids()
+        object_lib = self.scene_reader.get_object_library()
+        for si, scene_id in enumerate(scene_ids):
+            if scene_id == self.scene_id:
+                break
+
+        # OBJ_3D_DAT_TO_BOP_ID = {
+        #     obj_id: int(obj.mesh.file.split('/')[-1][4:-4])
+        #     for obj_id, obj in object_lib.items()
+        # }
+    
+        # write_scene_to_bop(path, si, self.scene_id, self.scene_reader, OBJ_3D_DAT_TO_BOP_ID, "train")
         
-        # enumerate_find index_write to bop
+        #get_object_meshes
+        annotation_ids = [obj.scene_object_id for obj in next(iter(self.annotation_images.values())).annotation_objects.values()]
+
+        meshes, poses = self.voxel_grid.convert_voxel_grid_to_mesh(ids=annotation_ids)
+
+        scene_id = self.scene_id
+        scene_file_reader = self.scene_reader
+        cam_poses_world_cords = scene_file_reader.get_camera_poses(scene_id)
+        cam_intrinsics = scene_file_reader.get_camera_info_scene(scene_id)
+        object_poses = scene_file_reader.get_object_poses(scene_id)
+
+        #TODO make sure nothing is upside down during annotation
+        cam_intrinsics_final = deepcopy(cam_intrinsics)
+
+        scene_path_bop = path/f"{mode}/{(si):06d}"
+        os.makedirs(scene_path_bop, exist_ok=True)
+        self.write_bop_camera_json(path/f"{mode}/{(si):06d}", cam_intrinsics_final)
+            
+
+        obj_meshes = []
+        obj_poses = []
+        obj_ids = []
+        for oi, (obj, obj_pose) in enumerate(object_poses):
+            obj_meshes.append(obj.mesh.as_trimesh())
+            obj_poses.append(obj_pose)
+            obj_ids.append(oi)
+        trimeshes = []
+        for mesh in meshes:
+            vertices = np.asarray(mesh.vertices)
+            faces = np.asarray(mesh.triangles)
+            tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+            trimeshes.append(tri_mesh)
+
+        self.render_masks_vis(cam_intrinsics, cam_poses_world_cords, obj_meshes, obj_ids, obj_poses)
+        self.render_masks_all(cam_intrinsics, cam_poses_world_cords, obj_meshes+trimeshes, obj_ids+[max(obj_ids)+1], obj_poses+obj_poses)
+
+
+
+        #write scene
+
+        # intrinsics
+        # cameras poses
+        # object meshes
+        # obejct poses
+
+
+
+        # enumerate_find index_write to bop -> done
+
+        
+
         # substract anno masks for occlusion
         # estimate mask from voxelgrid
         # calc centerpoint of voxelgrid for translation
         # np. eye for rotation
         # append poses
         # convert to coco
+
+
+
+

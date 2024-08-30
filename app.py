@@ -8,10 +8,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 import open3d as o3d
 from utils.annotationdataset import AnnotationDataset
-from utils.annotationimage import AnnotationImage, AnnotationObject
-from utils.voxelgrid import VoxelGrid
 import pandas as pd
-import pickle
 from copy import deepcopy
 from collections import deque
 
@@ -556,19 +553,23 @@ def manual_annotation_done():
     
     yield status_md, gr.Button("Reidentify Voxels in scene", visible=True), active_scene.active_image.generate_visualization()
 
-def write_to_bop(output_path):
+def write_annotation_to_bop(output_path):
 
+    global dataset
     # #check if all images have been annotated
     # for img in dataset.active_scene.annotation_images.values():
     #     if img.annotation_accepted == False:
     #         gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
     #         return
         
-    
-    # get scene index
-    scene_index = dataset.annotation_scenes.index(dataset.active_scene)
+    print("write_to_bop")
 
-    dataset.active_scene.write_to_bop(output_path/scene_index)
+
+    # get scene index
+    if dataset.active_scene is None:
+        gr.Warning("Please select a scene first", duration=3)
+        return
+    dataset.active_scene.write_to_bop(output_path, mode="train")
 
     return
 
@@ -792,6 +793,7 @@ def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoin
 
         show_grid_btn.click(show_voxel_grid)
 
+
         next_img_btn.click(next_image, outputs=[img_selection])
         
         manual_annotation_done_btn.click(
@@ -799,7 +801,9 @@ def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoin
             outputs=[status_md, manual_annotation_done_btn, prompting_image])
 
         write_to_bop_btn.click(
-            write_to_bop(gr.State(output_path)))
+            write_annotation_to_bop, gr.State(output_path))
+
+
 
         undo_btn.click(
             restore_savestate,
