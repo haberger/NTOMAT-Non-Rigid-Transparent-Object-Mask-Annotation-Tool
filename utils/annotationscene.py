@@ -8,11 +8,12 @@ from utils.voxelgrid import VoxelGrid
 import utils.vis_masks as vis_masks
 import pickle
 import time
-from utils.write_3ddat_to_bop import write_scene_to_bop
+# from utils.write_3ddat_to_bop import write_scene_to_bop
 import json
 from tqdm import tqdm 
-from utils.scenerenderer import SceneRenderer
+from utils.scenerenderer import SceneRenderer, get_bbox_from_mask
 import trimesh
+import os
 
 class AnnotationScene:
     def __init__(self, scene_id, scene_reader, camera_intrinsics, img_width, img_height):
@@ -103,7 +104,7 @@ class AnnotationScene:
             object_name = f"{object_name.rpartition('_')[0]}_{i}"
 
         scene_object_id = max(self.scene_object_ids)+1
-        self.scene_object_ids.append(scene_object_id)
+        # self.scene_object_ids.append(scene_object_id)
 
         for anno_image in self.annotation_images.values():
 
@@ -469,22 +470,29 @@ class AnnotationScene:
         for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
             cam_pose_world_final = deepcopy(cam_pose_world)
 
-            # img_id = f"{ii:06d}"
 
-            # # scene camera extrinsics in world coordinates and intrinsics
-            # cam_R_floats = [float(v) for v in cam_pose_world_final.tf[:3, :3].reshape(-1)]
-            # cam_t_floats = [float(v) * 1000 for v in cam_pose_world_final.tf[:3, 3].reshape(-1)]
+            # fill ii with leading zeros
+            img_id = f"{ii+1:06d}"
+            image = self.annotation_images[img_id+".png"]
 
+            num_annotation_objs = len(image.annotation_objects)
+            annotation_masks = [obj.mask for obj in image.annotation_objects.values()]
 
-#             # prepare and store scene camera to bop
-#             K = np.array([[cam_intrinsics_final.fx, 0, cam_intrinsics_final.cx],
-#                             [0, cam_intrinsics_final.fy, cam_intrinsics_final.cy],
-#                             [0, 0, 1.0]])
-            
-# # 
-#             scene_cameras[str(ii)] = {"cam_K": K.reshape(-1).tolist(), "depth_scale": 1.0,
-#                                     "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
             masks_visible = scene_renderer.render_masks(cam_pose_world_final.tf)
+
+            for i in range(len(masks_visible)):
+                for j in range(num_annotation_objs):
+                    annotation_mask = annotation_masks[j]
+                    if annotation_mask is not None:
+                        masks_visible[i] = masks_visible[i] & ~annotation_mask
+            for i in range(num_annotation_objs):
+                if annotation_masks[i] is None:
+                    annotation_masks[i] = np.zeros_like(masks_visible[0])
+        
+
+
+
+            masks_visible += annotation_masks
 
             masks.append(masks_visible)
         return masks
@@ -503,14 +511,132 @@ class AnnotationScene:
             masks_all = [
                 r.render_masks(cam_pose_world_final.tf)[0] for r in object_renderers
             ]
+            # masks_all = []
+            # for r in object_renderers:
+            #     mask= r.render_masks(cam_pose_world_final.tf)
+            #     for m in mask:
+            #         cv2.imshow("mask", m.astype(np.uint8) * 255)
+            #         cv2.waitKey(0)
+            #         cv2.destroyAllWindows()
+            #     masks_all.append(mask[0])
             masks.append(masks_all)
         return masks
 
 
+    def get_annotation_object_ids(self):
+        image = next(iter(self.annotation_images.values()))
+        scene_obj_ids = [obj.scene_object_id for obj in image.annotation_objects.values()]
+        datatset_obj_ids = [obj.dataset_object_id for obj in image.annotation_objects.values()]
+        return scene_obj_ids, datatset_obj_ids
+
+
+    def get_gt_jsons(self, cam_poses_world_cords, object_poses, masks_all, masks_visible, depth, OBJ_3D_DAT_TO_BOP_ID):
+
+        scene_gts = dict()
+        scene_gts_info = dict()
+        for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+            scene_gts[str(ii)] = []
+            scene_gts_info[str(ii)] = []
+            obj_counter = 0
+            for oi, (obj, obj_pose) in enumerate(object_poses):
+                obj_id = f"{obj_counter:06d}"
+
+                obj_pose_world_cords = np.array(obj_pose).reshape((4, 4))
+                obj_pose_cam = np.linalg.inv(cam_pose_world.tf) @ obj_pose_world_cords
+
+                R_floats = [float(v) for v in obj_pose_cam[:3, :3].reshape(-1)]
+                t_floats = [float(v) * 1000 for v in obj_pose_cam[:3, 3].reshape(-1)]  # mm
+
+                mask_all = masks_all[ii][oi]
+                mask_visible = masks_visible[ii][oi]
+
+                all_vs, all_us = np.nonzero(mask_all)
+                visible_vs, visible_us = np.nonzero(mask_visible)
+
+                if len(visible_us) == 0 or len(visible_vs) == 0:
+                    continue
+
+                
+
+                obj_info = {
+                        "bbox_obj": get_bbox_from_mask(masks_all[ii][oi]),
+                        "bbox_visib": get_bbox_from_mask(masks_visible[ii][oi]),
+                        "px_count_all": int(len(all_vs)),
+                        "px_count_visib": int(len(visible_vs)),
+                        "visib_fract": float(1. * len(visible_vs) / len(all_vs))
+                }
+
+                try:
+                    obj_info["px_count_valid"] = int((depth[all_vs, all_us] != 0).sum())
+                except Exception as e:
+                    pass      
+                scene_gts[str(ii)].append(
+                    {"cam_R_m2c": R_floats, "cam_t_m2c": t_floats, "obj_id": OBJ_3D_DAT_TO_BOP_ID[obj.id]}
+                )
+                scene_gts_info[str(ii)].append(obj_info)
+                obj_counter += 1
+        return scene_gts, scene_gts_info
+
+    def get_scene_cameras(self, cam_intrinsics_final, cam_poses_world_cords):
+        scene_cameras = dict()
+        for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+
+
+            # scene camera extrinsics in world coordinates and intrinsics
+            cam_R_floats = [float(v) for v in cam_pose_world.tf[:3, :3].reshape(-1)]
+            cam_t_floats = [float(v) * 1000 for v in cam_pose_world.tf[:3, 3].reshape(-1)]
+
+            # prepare and store scene camera to bop
+            K = np.array([[cam_intrinsics_final.fx, 0, cam_intrinsics_final.cx],
+                            [0, cam_intrinsics_final.fy, cam_intrinsics_final.cy],
+                            [0, 0, 1.0]])
+
+            scene_cameras[str(ii)] = {"cam_K": K.reshape(-1).tolist(), "depth_scale": 1.0,
+                                                "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
+        return scene_cameras
+    
+
+    def write_bop_files(
+            self,
+            scene_path_bop, 
+            cam_poses_world_cords, 
+            rgbs, 
+            depths, 
+            masks_all, 
+            masks_visible, 
+            objects, 
+            scene_gts, 
+            scene_gts_info, 
+            scene_cameras):
+        os.makedirs(scene_path_bop, exist_ok=True)
+        os.makedirs(os.path.join(scene_path_bop, "rgb"), exist_ok=True)
+        os.makedirs(os.path.join(scene_path_bop, "depth"), exist_ok=True)
+        os.makedirs(os.path.join(scene_path_bop, "mask"), exist_ok=True)
+        os.makedirs(os.path.join(scene_path_bop, "mask_visib"), exist_ok=True)
+
+        for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+            img_id = f"{ii:06d}"
+            cv2.imwrite(os.path.join(scene_path_bop, f"rgb/{img_id}.png"), rgbs[ii])
+            cv2.imwrite(os.path.join(scene_path_bop, f"depth/{img_id}.png"), depths[ii])
+
+            obj_counter = 0
+            for oi, obj in enumerate(objects):
+                obj_id = f"{obj_counter:06d}"
+                cv2.imwrite(os.path.join(scene_path_bop, f"mask_visib/{img_id}_{obj_id}.png"),
+                    255 * masks_visible[ii][oi].astype(np.uint8))
+                cv2.imwrite(os.path.join(scene_path_bop, f"mask/{img_id}_{obj_id}.png"),
+                    255 * masks_all[ii][oi].astype(np.uint8))
+                obj_counter += 1
+
+        with open(f"{scene_path_bop}/scene_gt.json", 'w') as file:
+            json.dump(scene_gts, file, indent=2)
+        with open(f"{scene_path_bop}/scene_gt_info.json", 'w') as file:
+            json.dump(scene_gts_info, file, indent=2)
+        with open(f"{scene_path_bop}/scene_camera.json", 'w') as file:
+            json.dump(scene_cameras, file, indent=2)
+
     def write_to_bop(self, path, mode):
         import os
-        print(path)
-        print(os.listdir(path))
 
         # find which scene this is
         scene_ids = self.scene_reader.get_scene_ids()
@@ -519,17 +645,20 @@ class AnnotationScene:
             if scene_id == self.scene_id:
                 break
 
-        # OBJ_3D_DAT_TO_BOP_ID = {
-        #     obj_id: int(obj.mesh.file.split('/')[-1][4:-4])
-        #     for obj_id, obj in object_lib.items()
-        # }
+        OBJ_3D_DAT_TO_BOP_ID = {
+            obj_id: int(obj.mesh.file.split('/')[-1][4:-4])
+            for obj_id, obj in object_lib.items()
+        }
     
+
         # write_scene_to_bop(path, si, self.scene_id, self.scene_reader, OBJ_3D_DAT_TO_BOP_ID, "train")
         
         #get_object_meshes
         annotation_ids = [obj.scene_object_id for obj in next(iter(self.annotation_images.values())).annotation_objects.values()]
 
         meshes, poses = self.voxel_grid.convert_voxel_grid_to_mesh(ids=annotation_ids)
+
+        print(poses)
 
         scene_id = self.scene_id
         scene_file_reader = self.scene_reader
@@ -552,17 +681,47 @@ class AnnotationScene:
             obj_meshes.append(obj.mesh.as_trimesh())
             obj_poses.append(obj_pose)
             obj_ids.append(oi)
-        trimeshes = []
-        for mesh in meshes:
-            vertices = np.asarray(mesh.vertices)
-            faces = np.asarray(mesh.triangles)
-            tri_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-            trimeshes.append(tri_mesh)
 
-        self.render_masks_vis(cam_intrinsics, cam_poses_world_cords, obj_meshes, obj_ids, obj_poses)
-        self.render_masks_all(cam_intrinsics, cam_poses_world_cords, obj_meshes+trimeshes, obj_ids+[max(obj_ids)+1], obj_poses+obj_poses)
+        print(self.scene_object_ids)
+        print(self.dataset_object_ids)
+        vis_masks = self.render_masks_vis(cam_intrinsics, deepcopy(cam_poses_world_cords), deepcopy(obj_meshes), obj_ids, deepcopy(obj_poses))
 
 
+
+
+        all_obj_meshes = obj_meshes + meshes
+        all_obj_ids = obj_ids + self.get_annotation_object_ids()[0]
+        all_obj_poses = obj_poses + poses
+
+        full_masks = self.render_masks_all(cam_intrinsics, deepcopy(cam_poses_world_cords), deepcopy(all_obj_meshes), all_obj_ids, deepcopy(all_obj_poses))
+
+        rgb_paths = scene_file_reader.get_images_rgb_path(scene_id)
+        depth_paths = scene_file_reader.get_images_depth_path(scene_id)
+
+        rgbs = [cv2.imread(rgb_path) for rgb_path in rgb_paths]
+        depths = [cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH) for depth_path in depth_paths]
+
+        scene_gts, scene_gts_info = self.get_gt_jsons(
+            cam_poses_world_cords, 
+            object_poses, 
+            full_masks, 
+            vis_masks, 
+            depths, 
+            OBJ_3D_DAT_TO_BOP_ID)
+
+        scene_cameras = self.get_scene_cameras(cam_intrinsics_final, cam_poses_world_cords)
+
+        self.write_bop_files(
+            scene_path_bop, 
+            cam_poses_world_cords, 
+            rgbs, 
+            depths, 
+            full_masks, 
+            vis_masks, 
+            all_obj_meshes, 
+            scene_gts, 
+            scene_gts_info, 
+            scene_cameras)
 
         #write scene
 

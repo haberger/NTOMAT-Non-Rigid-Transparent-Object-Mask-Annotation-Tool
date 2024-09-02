@@ -5,6 +5,7 @@ import pickle
 import cv2
 import open3d as o3d
 import mcubes
+import trimesh
 
 class VoxelGrid:
     def __init__(self, width=None, height=None, depth=None, voxel_size=None, origin=None, color=None, img_width=500, img_height=500):
@@ -141,7 +142,7 @@ class VoxelGrid:
         # Initialize visualizer
         vis = o3d.visualization.Visualizer()
 
-        num_ids = max(scene.scene_object_ids)+1
+        num_ids = len(scene.scene_object_ids+scene.get_annotation_object_ids()[0])+1
 
         # Set of voxels
         voxel_correspondences_global = {tuple(voxel.grid_index): np.zeros(num_ids, dtype=int) for voxel in self.o3d_grid.get_voxels()}
@@ -331,13 +332,21 @@ class VoxelGrid:
             vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
             mesh = o3d.geometry.TriangleMesh()
             vertices_transformed =  vertices * self.voxel_size + self.origin
-            mesh.vertices = o3d.utility.Vector3dVector(vertices_transformed)
-            mesh.triangles = o3d.utility.Vector3iVector(triangles)
-            o3d.visualization.draw_geometries([mesh, self.o3d_grid_id])
-            meshes.append(mesh)
+            # mesh.vertices = o3d.utility.Vector3dVector(vertices_transformed)
+            # mesh.triangles = o3d.utility.Vector3iVector(triangles)
+            # o3d.visualization.draw_geometries([mesh, self.o3d_grid_id])
+
+            # vertices = np.asarray(mesh.vertices)
+            # faces = np.asarray(mesh.triangles)
+            mesh = trimesh.Trimesh(vertices=vertices_transformed, faces=triangles)
+
             pose = np.eye(4)
-            pose[:3, 3] = mesh.get_center()
+            # pose[:3, 3] = mesh.get_center()
+            pose[:3, 3] = np.mean(vertices_transformed, axis=0)
+            mesh.apply_transform(np.linalg.inv(pose))
+
             poses.append(pose)
+            meshes.append(mesh)
 
         return meshes, poses
 

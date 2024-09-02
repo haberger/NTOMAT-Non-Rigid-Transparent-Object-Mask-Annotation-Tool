@@ -33,17 +33,17 @@ class SceneRenderer():
         self.scene = pyrender.Scene(bg_color=[0, 0, 0])
 
         if model_colors == None:
-            model_colors = [((oi), ((oi-1)*10) % 255, 200) for oi in obj_ids]
+            model_colors = [((oi+1), ((oi)*10) % 255, 200) for oi,_ in enumerate(obj_ids)]
         self.model_colors = model_colors
 
         # Add model mesh
-        for oi, model, obj_pose in zip(obj_ids, obj_meshes, obj_poses):
+        for oi, (model, obj_pose) in enumerate(zip(obj_meshes, obj_poses)):
             model.apply_transform(np.array(obj_pose).reshape((4, 4)))
 
             # pyrender render flag SEG does not allow to ignore culling backfaces
             # Instead set color for the mask on the trimesh mesh
             visual = trimesh.visual.create_visual(mesh=model)
-            visual.face_colors = self.model_colors[oi-1] # TODO index out of range 
+            visual.face_colors = self.model_colors[oi] # TODO index out of range 
             model.visual = visual
             pyr_mesh = pyrender.Mesh.from_trimesh(model, smooth=False)
             nm = pyrender.Node(mesh=pyr_mesh)
@@ -59,7 +59,6 @@ class SceneRenderer():
         self.nl = pyrender.Node(matrix=np.eye(4))
         self.scene.add_node(self.nl)
 
-        # Init renderer
         self.renderer = pyrender.OffscreenRenderer(intrinsics.width, intrinsics.height)
 
     def render_masks(self, cam_pose):
