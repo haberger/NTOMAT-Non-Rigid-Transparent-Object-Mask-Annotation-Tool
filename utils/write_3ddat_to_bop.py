@@ -387,6 +387,6 @@ if __name__ == '__main__':
 
     # === Save scene informations =============================================
     for si, scene_id in enumerate(scene_ids):
-        write_scene_to_bop(args.output, si, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode)
+        write_scene_to_bop(args.output, si, scene_id, scene_file_reader, OBJ_3D_DAT_TO_BOP_ID, mode)
 
 

@@ -699,7 +699,7 @@ class AnnotationScene:
         depth_paths = scene_file_reader.get_images_depth_path(scene_id)
 
         rgbs = [cv2.imread(rgb_path) for rgb_path in rgb_paths]
-        depths = [cv2.imread(depth_path, cv2.IMREAD_ANYDEPTH) for depth_path in depth_paths]
+        depths = [cv2.imread(depth_path, cv2.IMREAD_UNCHANGED) for depth_path in depth_paths]
 
         scene_gts, scene_gts_info = self.get_gt_jsons(
             cam_poses_world_cords, 

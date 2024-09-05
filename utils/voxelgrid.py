@@ -179,6 +179,15 @@ class VoxelGrid:
             valid_positions_mask = (grid_position != (0, 0, 0)).all(axis=-1)
             valid_grid_positions = grid_position[valid_positions_mask]
             valid_ids = image.get_complete_segmap()[valid_positions_mask]
+
+            segmap = image.get_complete_segmap()
+
+            # create figure overlaying segmap and grid_position which is an image using matplotlib and save it to disk
+            import matplotlib.pyplot as plt
+            plt.figure()
+            plt.imshow(segmap)
+            plt.imshow(grid_position, alpha=0.5)
+            plt.savefig(f"segmap_grid_position_{img_idx}.png")
             for pos, voxel_id in zip(valid_grid_positions, valid_ids):
                 pos_tuple = tuple(pos)
                 if pos_tuple in voxel_correspondences_global:
@@ -197,15 +206,17 @@ class VoxelGrid:
                 continue
             sorted_ids = np.argsort(value)[::-1]
             if sorted_ids[0] != 0:
-                if sorted_ids[1] == 0 and sorted_ids[0] > sorted_ids[1]*1.5:
+                #second most common vote is background: add most dominant object voxel
+                if sorted_ids[1] == 0: #and sorted_ids[0] > sorted_ids[1]*1.5:
                     voxel = o3d.geometry.Voxel(key, [sorted_ids[0] / 255] * 3)
                     colored_voxel_grid.add_voxel(voxel)
+                # neither of the two most common votes is background: add voxel if it is at least 3 times more common than the second most common vote
                 elif sorted_ids[1] != 0 and sorted_ids[0] > sorted_ids[1]*3:
                     voxel = o3d.geometry.Voxel(key, [sorted_ids[0] / 255] * 3)
                     colored_voxel_grid.add_voxel(voxel)
-                    
+            
 
-        # Filter out noise voxels
+        # Filter out noise voxels you need at least three neigbours with the same id as the majority vote
         for voxel in colored_voxel_grid.get_voxels():
             grid_index = tuple(voxel.grid_index)
             count = sum(
@@ -216,7 +227,7 @@ class VoxelGrid:
                 for k in range(-1, 2)
                 if not (i == j == k == 0)
             )
-            if count < 2:
+            if count <= 3:
                 colored_voxel_grid.remove_voxel(grid_index)
         self.o3d_grid_id = colored_voxel_grid
     
@@ -262,7 +273,7 @@ class VoxelGrid:
         cv2.destroyAllWindows()
 
         return img
-    
+
     def generate_colored_voxelgrid(self, voxel_size, origin, height, width, depth):
         """
         Optimized version: Creates a voxel grid from a point cloud where each point represents a voxel.
