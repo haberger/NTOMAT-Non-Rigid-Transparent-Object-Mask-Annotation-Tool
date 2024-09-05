@@ -85,10 +85,19 @@ class AnnotationImage:
             self.active_object.mask = mask[0,:,:]
             self.active_object.logit = logit[0,:,:]
 
+    def reset_prompts(self):
+        for obj in self.annotation_objects.values():
+            obj.prompts = []
+            obj.prompts_label = []
+            obj.mask = None
+            obj.logit = None
+
     def generate_auto_prompts(self, scene, predictor):
         '''
         takes an annotation object and generates prompts for it
         '''
+
+        self.reset_prompts()
 
         start_time = time.time()
         voxelgrid = scene.voxel_grid

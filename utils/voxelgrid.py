@@ -140,7 +140,7 @@ class VoxelGrid:
             scene.camera_intrinsics[1, 2]
         )
         # Initialize visualizer
-        vis = o3d.visualization.Visualizer()
+        # vis = o3d.visualization.Visualizer()
 
         num_ids = len(scene.scene_object_ids+scene.get_annotation_object_ids()[0])+1
 
@@ -156,22 +156,25 @@ class VoxelGrid:
             # Get camera pose
             pose = image.camera_pose
 
-            # Project voxel grid into image space
-            vis.create_window(width=scene.img_width, height=scene.img_height, visible=False)
-            vis.add_geometry(self.o3d_grid)
-            view_control = vis.get_view_control()
-            param = o3d.camera.PinholeCameraParameters()
-            param.intrinsic = intrinsics
-            param.extrinsic = np.linalg.inv(pose.tf)
-            view_control.convert_from_pinhole_camera_parameters(param, True)
-            vis.get_render_option().background_color = np.array([0, 0, 0])
-            vis.poll_events()
-            vis.update_renderer()
-            rgb = vis.capture_screen_float_buffer(True)
-            vis.destroy_window()
+            # # Project voxel grid into image space
+            # vis.create_window(width=scene.img_width, height=scene.img_height, visible=False)
+            # vis.add_geometry(self.o3d_grid)
+            # view_control = vis.get_view_control()
+            # param = o3d.camera.PinholeCameraParameters()
+            # param.intrinsic = intrinsics
+            # param.extrinsic = np.linalg.inv(pose.tf)
+            # view_control.convert_from_pinhole_camera_parameters(param, True)
+            # vis.get_render_option().background_color = np.array([0, 0, 0])
+            # vis.poll_events()
+            # vis.update_renderer()
+            # rgb = vis.capture_screen_float_buffer(True)
+            # vis.destroy_window()
+
+            rgb = self.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, pose, self.o3d_grid)
 
             # Convert and scale grid positions
-            grid_position = np.array(rgb)
+            grid_position = np.array(rgb).astype(np.float32)
+            grid_position /= np.array([255, 255, 255])
             grid_position *= np.array([self.width/self.voxel_size, self.height/self.voxel_size, self.depth/self.voxel_size])
             grid_position = np.round(grid_position).astype(np.int32)
 
@@ -192,6 +195,11 @@ class VoxelGrid:
                 pos_tuple = tuple(pos)
                 if pos_tuple in voxel_correspondences_global:
                     voxel_correspondences_global[pos_tuple][voxel_id] += 1
+
+        # get mean and std of number of votes for each voxel
+        votes = np.array([np.sum(votes) for votes in voxel_correspondences_global.values()])
+        mean_votes = np.mean(votes)
+        std_votes = np.std(votes)
 
         # Deepcopy the grid for coloring
         colored_voxel_grid = deepcopy(self.o3d_grid)
@@ -214,6 +222,11 @@ class VoxelGrid:
                 elif sorted_ids[1] != 0 and sorted_ids[0] > sorted_ids[1]*3:
                     voxel = o3d.geometry.Voxel(key, [sorted_ids[0] / 255] * 3)
                     colored_voxel_grid.add_voxel(voxel)
+            # elif sorted_ids[0] == 0:
+            #     # background is the most common vote: add voxel if the second most common vote is at least 1.5 times less common
+            #     if sorted_ids[1]*1.5 >= sorted_ids[0]:
+            #         voxel = o3d.geometry.Voxel(key, [sorted_ids[1] / 255] * 3)
+            #         colored_voxel_grid.add_voxel(voxel)
             
 
         # Filter out noise voxels you need at least three neigbours with the same id as the majority vote
@@ -227,8 +240,13 @@ class VoxelGrid:
                 for k in range(-1, 2)
                 if not (i == j == k == 0)
             )
-            if count <= 3:
-                colored_voxel_grid.remove_voxel(grid_index)
+            num_votes = np.sum(voxel_correspondences_global[grid_index])
+            if num_votes < mean_votes - 3*std_votes:
+                if count <= 5:
+                    colored_voxel_grid.remove_voxel(grid_index)
+            else:
+                if count <= 3:
+                    colored_voxel_grid.remove_voxel(grid_index)
         self.o3d_grid_id = colored_voxel_grid
     
     def visualize_colored_meshes(self, meshes):
@@ -268,9 +286,9 @@ class VoxelGrid:
         projection_renderer.setup_camera(intrinsics, extrinsics)
         img = np.asarray(projection_renderer.render_to_image()).astype(np.uint8)
 
-        cv2.imshow("img", img*10)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+        # cv2.imshow("img", img*10)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows()
 
         return img
 

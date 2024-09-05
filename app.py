@@ -435,22 +435,21 @@ def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection, vox
 
     status_md = ("### Click on the image to add prompts (Foreground - Left click, "
                 "Background - Right click)\n")
-    
+    img_selection = active_scene.next_image_name()
     if active_scene.voxel_grid is not None:
         active_scene.carve_silhouette(
             active_image, 
             keep_voxels_outside_image=keep_voxels_outside_image)
         voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
-        img_selection = active_scene.next_image_name()
+        yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=False)
     else:
         if keep_voxels_outside_image == False:
             yield "### Instanciating VoxelGrid", gr.Image(), img_selection, gr.Button(visible=False)
             active_scene.instanciate_voxel_grid_at_poi_fast(trigger_image=active_scene.active_image, voxel_size=voxel_size)
             voxel_image = active_scene.voxel_grid.get_voxel_grid_top_down_view()
-            img_selection = active_scene.next_image_name()
-            yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=True)
-    yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=True)
-
+            yield status_md, voxel_image, img_selection, gr.Button("Seen All Objects fully", visible=False)
+        else:
+            yield status_md, gr.Image(), img_selection, gr.Button("Seen All Objects fully", visible=True)
 
 def instanciate_voxel_grid(voxel_size):
     """

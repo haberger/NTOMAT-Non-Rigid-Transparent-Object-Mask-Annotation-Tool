@@ -530,7 +530,7 @@ class AnnotationScene:
         return scene_obj_ids, datatset_obj_ids
 
 
-    def get_gt_jsons(self, cam_poses_world_cords, object_poses, masks_all, masks_visible, depth, OBJ_3D_DAT_TO_BOP_ID):
+    def get_gt_jsons(self, cam_poses_world_cords, object_poses, object_dataset_ids, masks_all, masks_visible, depth, OBJ_3D_DAT_TO_BOP_ID):
 
         scene_gts = dict()
         scene_gts_info = dict()
@@ -538,8 +538,7 @@ class AnnotationScene:
             scene_gts[str(ii)] = []
             scene_gts_info[str(ii)] = []
             obj_counter = 0
-            for oi, (obj, obj_pose) in enumerate(object_poses):
-                obj_id = f"{obj_counter:06d}"
+            for oi, (obj_pose, obj_id) in enumerate(zip(object_poses, object_dataset_ids)):
 
                 obj_pose_world_cords = np.array(obj_pose).reshape((4, 4))
                 obj_pose_cam = np.linalg.inv(cam_pose_world.tf) @ obj_pose_world_cords
@@ -571,7 +570,7 @@ class AnnotationScene:
                 except Exception as e:
                     pass      
                 scene_gts[str(ii)].append(
-                    {"cam_R_m2c": R_floats, "cam_t_m2c": t_floats, "obj_id": OBJ_3D_DAT_TO_BOP_ID[obj.id]}
+                    {"cam_R_m2c": R_floats, "cam_t_m2c": t_floats, "obj_id": OBJ_3D_DAT_TO_BOP_ID[obj_id]}
                 )
                 scene_gts_info[str(ii)].append(obj_info)
                 obj_counter += 1
@@ -595,7 +594,6 @@ class AnnotationScene:
                                                 "cam_R_w2c": cam_R_floats, "cam_t_w2c": cam_t_floats}
         return scene_cameras
     
-
     def write_bop_files(
             self,
             scene_path_bop, 
@@ -640,16 +638,23 @@ class AnnotationScene:
 
         # find which scene this is
         scene_ids = self.scene_reader.get_scene_ids()
+
         object_lib = self.scene_reader.get_object_library()
         for si, scene_id in enumerate(scene_ids):
             if scene_id == self.scene_id:
                 break
 
+
+        #annotation_ids
+        annotation_obj_scene_ids, annotation_obj_dataset_ids = self.get_annotation_object_ids()
+        #scene_id : dataset_id
         OBJ_3D_DAT_TO_BOP_ID = {
             obj_id: int(obj.mesh.file.split('/')[-1][4:-4])
             for obj_id, obj in object_lib.items()
         }
-    
+        for dataset_obj_id in  annotation_obj_dataset_ids:
+            OBJ_3D_DAT_TO_BOP_ID[dataset_obj_id] = dataset_obj_id
+
 
         # write_scene_to_bop(path, si, self.scene_id, self.scene_reader, OBJ_3D_DAT_TO_BOP_ID, "train")
         
@@ -677,10 +682,12 @@ class AnnotationScene:
         obj_meshes = []
         obj_poses = []
         obj_ids = []
+        obj_dataset_ids = []
         for oi, (obj, obj_pose) in enumerate(object_poses):
             obj_meshes.append(obj.mesh.as_trimesh())
             obj_poses.append(obj_pose)
             obj_ids.append(oi)
+            obj_dataset_ids.append(obj.id)
 
         print(self.scene_object_ids)
         print(self.dataset_object_ids)
@@ -688,9 +695,14 @@ class AnnotationScene:
 
 
 
+      
 
         all_obj_meshes = obj_meshes + meshes
-        all_obj_ids = obj_ids + self.get_annotation_object_ids()[0]
+        all_obj_ids = obj_ids + annotation_obj_scene_ids
+        all_obj_dataset_ids = obj_dataset_ids + annotation_obj_dataset_ids
+        print(all_obj_ids)
+        print(obj_ids)
+        print(annotation_obj_scene_ids)
         all_obj_poses = obj_poses + poses
 
         full_masks = self.render_masks_all(cam_intrinsics, deepcopy(cam_poses_world_cords), deepcopy(all_obj_meshes), all_obj_ids, deepcopy(all_obj_poses))
@@ -703,7 +715,8 @@ class AnnotationScene:
 
         scene_gts, scene_gts_info = self.get_gt_jsons(
             cam_poses_world_cords, 
-            object_poses, 
+            all_obj_poses, 
+            all_obj_dataset_ids,
             full_masks, 
             vis_masks, 
             depths, 
