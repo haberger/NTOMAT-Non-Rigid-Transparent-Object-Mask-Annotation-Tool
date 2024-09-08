@@ -186,11 +186,11 @@ class VoxelGrid:
             segmap = image.get_complete_segmap()
 
             # create figure overlaying segmap and grid_position which is an image using matplotlib and save it to disk
-            import matplotlib.pyplot as plt
-            plt.figure()
-            plt.imshow(segmap)
-            plt.imshow(grid_position, alpha=0.5)
-            plt.savefig(f"segmap_grid_position_{img_idx}.png")
+            # import matplotlib.pyplot as plt
+            # plt.figure()
+            # plt.imshow(segmap)
+            # plt.imshow(grid_position, alpha=0.5)
+            # plt.savefig(f"segmap_grid_position_{img_idx}.png")
             for pos, voxel_id in zip(valid_grid_positions, valid_ids):
                 pos_tuple = tuple(pos)
                 if pos_tuple in voxel_correspondences_global:
@@ -242,10 +242,10 @@ class VoxelGrid:
             )
             num_votes = np.sum(voxel_correspondences_global[grid_index])
             if num_votes < mean_votes - 3*std_votes:
-                if count <= 5:
+                if count <= 4:
                     colored_voxel_grid.remove_voxel(grid_index)
             else:
-                if count <= 3:
+                if count <= 2:
                     colored_voxel_grid.remove_voxel(grid_index)
         self.o3d_grid_id = colored_voxel_grid
     
@@ -265,6 +265,10 @@ class VoxelGrid:
         vis.destroy_window()
 
     def project_voxelgrid(self, img_width, img_height, intrinsics, cam_pose=None, voxelgrid=None):
+        # if 'projection_renderer' in locals() or 'projection_renderer' in globals():
+        #     del projection_renderer
+
+
         projection_renderer = o3d.visualization.rendering.OffscreenRenderer(img_width, img_height)
 
         projection_renderer.scene.set_background([0.0, 0.0, 0.0, 1.0])
@@ -318,7 +322,6 @@ class VoxelGrid:
         min_bound = origin 
 
         i, j, k = np.mgrid[:num_voxels_height, :num_voxels_width, :num_voxels_depth]
-        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
 
         start_time = time.time()
         points = min_bound + np.stack([i, j, k], axis=-1) * voxel_size
@@ -326,17 +329,14 @@ class VoxelGrid:
 
         colors = np.stack([i, j, k], axis=-1) / np.array([num_voxels_height, num_voxels_width, num_voxels_depth])
         colors = colors.reshape(-1, 3)  # Flatten into a list of colors
-        print(f"Time taken for points and colors setup: {time.time() - start_time:.2f} seconds")
 
         start_time = time.time()
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points)
         pcd.colors = o3d.utility.Vector3dVector(colors)  
-        print(f"Time taken for point cloud creation: {time.time() - start_time:.2f} seconds")
 
         start_time = time.time()
         voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)  
-        print(f"Time taken for voxel grid creation: {time.time() - start_time:.2f} seconds")
 
         return voxel_grid
     
@@ -351,6 +351,7 @@ class VoxelGrid:
         voxel_grids = {k: np.copy(voxel_grid) for k in ids}
         meshes = [] 
         poses = []
+        ids = []
         for voxel in self.o3d_grid_id.get_voxels():
             id = np.round(voxel.color[0]*255, 0).astype(int)
             #check if key exists
@@ -376,41 +377,7 @@ class VoxelGrid:
 
             poses.append(pose)
             meshes.append(mesh)
+            ids.append(id)
 
-        return meshes, poses
+        return meshes, poses, ids
 
-
-
-        # print(voxel_grid.shape)
-        # for voxel in self.o3d_grid.get_voxels():
-        #     voxel_grid[voxel.grid_index[0], voxel.grid_index[1], voxel.grid_index[2]] = 15
-        
-        # vertices, triangles = mcubes.marching_cubes(voxel_grid, 0)
-        # print(len(vertices), len(triangles))
-        # print(vertices[0], triangles[0])
-        # mesh = o3d.geometry.TriangleMesh()
-        # mesh.vertices = o3d.utility.Vector3dVector(vertices)
-        # mesh.triangles = o3d.utility.Vector3iVector(triangles)
-        # o3d.visualization.draw_geometries([mesh])
-        # print(f"mesh center: mesh.get_center()")
-        # triangle_clusters, cluster_n_triangles, _ = mesh.cluster_connected_triangles()
-        # triangle_clusters = np.asarray(triangle_clusters)
-        # cluster_n_triangles = np.asarray(cluster_n_triangles)
-        # # Get unique cluster labels and corresponding triangle counts
-        # unique_labels = np.unique(triangle_clusters)
-        # print(unique_labels)
-        # # Create separate meshes for each cluster
-        # separate_meshes = []
-        # for label in unique_labels:
-        #     # Filter triangles belonging to the current cluster
-        #     cluster_triangles = np.where(triangle_clusters == label)[0]
-        #     if len(cluster_triangles) < 100:
-        #         continue
-        #     mesh_cluster = o3d.geometry.TriangleMesh(
-        #         vertices=mesh.vertices,
-        #         triangles=o3d.utility.Vector3iVector(
-        #             np.asarray(mesh.triangles)[cluster_triangles]
-        #         ),
-        #     )
-        #     separate_meshes.append(mesh_cluster)
-        # self.visualize_colored_meshes(separate_meshes)

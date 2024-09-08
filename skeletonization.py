@@ -41,8 +41,6 @@ for label in range(1, num_labels):  # Start at 1 to skip the background label (0
 
 centers = np.array(all_points, dtype=np.int32)
 
-print(time.time() - start_time)
-
 #display skeleton overlayed on original image ovverlay the centers
 plt.figure(figsize=(10,10))
 plt.imshow(image)

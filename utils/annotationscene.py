@@ -149,7 +149,6 @@ class AnnotationScene:
 
         for index, segmap in enumerate(segmaps):  # Enumerate to get indices
             fully_visible_ids = self.get_fully_visible_objects_from_segmap(segmap, self.scene_object_ids)
-            print(fully_visible_ids)
 
             if np.all(fully_visible_ids):
                 return index
@@ -246,7 +245,6 @@ class AnnotationScene:
     
     def instanciate_voxel_grid_at_poi_fast(self, trigger_image, voxel_size=0.005,):
 
-        start_time = time.time()
         camera_poses = [image.camera_pose for image in self.annotation_images.values()]
 
         # get largest distance between cameras and ray intersection
@@ -258,8 +256,6 @@ class AnnotationScene:
         width = max_distance * 1.5
         height = max_distance * 1.5
         depth = max_distance * 1.5
-        print(width, height, depth)
-        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
 
         start_time = time.time()
         self.voxel_grid = VoxelGrid(
@@ -296,10 +292,7 @@ class AnnotationScene:
         width = max_distance * 1.5
         height = max_distance * 1.5
         depth = max_distance * 1.5
-        print(width, height, depth)
-        print(f"Time taken for initial setup: {time.time() - start_time:.2f} seconds")
 
-        start_time = time.time()
         self.voxel_grid = VoxelGrid(
             width=width,
             height=height,
@@ -310,7 +303,6 @@ class AnnotationScene:
             img_width=self.img_width,
             img_height=self.img_height
         )
-        print(f"Time taken for voxel grid creation: {time.time() - start_time:.2f} seconds")
 
         print("prefiltering")
 
@@ -341,10 +333,7 @@ class AnnotationScene:
             cam.extrinsic = extrinsic
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=False)
             relevant_points += [voxel.grid_index for voxel in mask_grid.get_voxels()]
-            print(mask_grid)
-        print(f"Time taken for first loop over camera poses: {time.time() - start_time:.2f} seconds")
 
-        start_time = time.time()
         for pose in camera_poses:
             pose = pose.tf
             mask_grid = deepcopy(self.voxel_grid.o3d_grid)
@@ -357,17 +346,12 @@ class AnnotationScene:
             cam.intrinsic = intrinsic
             cam.extrinsic = extrinsic
             mask_grid.carve_silhouette(silhouette, cam, keep_voxels_outside_image=True)
-        print(f"Time taken for second loop over camera poses: {time.time() - start_time:.2f} seconds")
 
-        start_time = time.time()
         for voxel in mask_grid.get_voxels():
             self.voxel_grid.o3d_grid.remove_voxel(voxel.grid_index)
-        print(f"Time taken for loop over voxels: {time.time() - start_time:.2f} seconds")
 
-        start_time = time.time()
         for image in images:
             self.carve_silhouette(image, keep_voxels_outside_image=True)
-        print(f"Time taken for loop over images: {time.time() - start_time:.2f} seconds")
 
     def get_cameras_point_of_interest(self, debug_vizualization=False):
         '''adepted from https://math.stackexchange.com/questions/4865611/intersection-closest-point-of-multiple-rays-in-3d-space'''
@@ -445,8 +429,11 @@ class AnnotationScene:
         active_image = self.active_image.rgb_path.name
         rgb_imgs = self.annotation_images.keys()
         indx = list(rgb_imgs).index(active_image)
-        new_selection = list(rgb_imgs)[indx+1]
-        return new_selection
+        #if last image return same image and give warning
+        if indx == len(rgb_imgs)-1:
+            print("Last image reached")
+            return active_image
+        return list(rgb_imgs)[indx+1]
     
 
     def write_bop_camera_json(self, output_path, cam_intrinsics_final):
@@ -535,13 +522,14 @@ class AnnotationScene:
         scene_gts = dict()
         scene_gts_info = dict()
         for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
+            cam_pose_world_final = deepcopy(cam_pose_world)
             scene_gts[str(ii)] = []
             scene_gts_info[str(ii)] = []
             obj_counter = 0
             for oi, (obj_pose, obj_id) in enumerate(zip(object_poses, object_dataset_ids)):
 
                 obj_pose_world_cords = np.array(obj_pose).reshape((4, 4))
-                obj_pose_cam = np.linalg.inv(cam_pose_world.tf) @ obj_pose_world_cords
+                obj_pose_cam = np.linalg.inv(cam_pose_world_final.tf) @ obj_pose_world_cords
 
                 R_floats = [float(v) for v in obj_pose_cam[:3, :3].reshape(-1)]
                 t_floats = [float(v) * 1000 for v in obj_pose_cam[:3, 3].reshape(-1)]  # mm
@@ -605,17 +593,21 @@ class AnnotationScene:
             objects, 
             scene_gts, 
             scene_gts_info, 
-            scene_cameras):
+            scene_cameras,
+            only_masks):
+        if not only_masks:
+            os.makedirs(os.path.join(scene_path_bop, "rgb"), exist_ok=True)
+            os.makedirs(os.path.join(scene_path_bop, "depth"), exist_ok=True)
         os.makedirs(scene_path_bop, exist_ok=True)
-        os.makedirs(os.path.join(scene_path_bop, "rgb"), exist_ok=True)
-        os.makedirs(os.path.join(scene_path_bop, "depth"), exist_ok=True)
+
         os.makedirs(os.path.join(scene_path_bop, "mask"), exist_ok=True)
         os.makedirs(os.path.join(scene_path_bop, "mask_visib"), exist_ok=True)
 
         for ii, cam_pose_world in enumerate(tqdm(cam_poses_world_cords, total=len(cam_poses_world_cords))):
             img_id = f"{ii:06d}"
-            cv2.imwrite(os.path.join(scene_path_bop, f"rgb/{img_id}.png"), rgbs[ii])
-            cv2.imwrite(os.path.join(scene_path_bop, f"depth/{img_id}.png"), depths[ii])
+            if not only_masks:
+                cv2.imwrite(os.path.join(scene_path_bop, f"rgb/{img_id}.png"), rgbs[ii])
+                cv2.imwrite(os.path.join(scene_path_bop, f"depth/{img_id}.png"), depths[ii])
 
             obj_counter = 0
             for oi, obj in enumerate(objects):
@@ -633,7 +625,7 @@ class AnnotationScene:
         with open(f"{scene_path_bop}/scene_camera.json", 'w') as file:
             json.dump(scene_cameras, file, indent=2)
 
-    def write_to_bop(self, path, mode):
+    def write_to_bop(self, path, mode, experiment=None):
         import os
 
         # find which scene this is
@@ -643,8 +635,7 @@ class AnnotationScene:
         for si, scene_id in enumerate(scene_ids):
             if scene_id == self.scene_id:
                 break
-
-
+        
         #annotation_ids
         annotation_obj_scene_ids, annotation_obj_dataset_ids = self.get_annotation_object_ids()
         #scene_id : dataset_id
@@ -661,9 +652,11 @@ class AnnotationScene:
         #get_object_meshes
         annotation_ids = [obj.scene_object_id for obj in next(iter(self.annotation_images.values())).annotation_objects.values()]
 
-        meshes, poses = self.voxel_grid.convert_voxel_grid_to_mesh(ids=annotation_ids)
-
-        print(poses)
+        meshes, poses, ids = self.voxel_grid.convert_voxel_grid_to_mesh(ids=annotation_ids)
+        dataset_ids = []
+        for id in ids:
+            id_indx = annotation_obj_scene_ids.index(id)
+            dataset_ids.append(annotation_obj_dataset_ids[id_indx])
 
         scene_id = self.scene_id
         scene_file_reader = self.scene_reader
@@ -674,10 +667,24 @@ class AnnotationScene:
         #TODO make sure nothing is upside down during annotation
         cam_intrinsics_final = deepcopy(cam_intrinsics)
 
-        scene_path_bop = path/f"{mode}/{(si):06d}"
+        if experiment == None:
+            scene_path_bop = path/f"{mode}/{(si):06d}"
+        else:
+            scene_path_bop = path/f"{mode}/{(si):06d}_{(experiment):03d}"
         os.makedirs(scene_path_bop, exist_ok=True)
-        self.write_bop_camera_json(path/f"{mode}/{(si):06d}", cam_intrinsics_final)
+        self.write_bop_camera_json(scene_path_bop, deepcopy(cam_intrinsics_final))
             
+        # save trimesh as ply into dataset_path/models
+
+        mesh_folder = path/"models"/f"{(si):06d}"
+        if experiment != None:
+            ply_name = f"obj_{int(id):06d}_{(experiment):03d}.ply"
+        else:
+            ply_name = f"obj_{int(id):06d}.ply"
+        os.makedirs(mesh_folder, exist_ok=True)
+        for mesh, id in zip(meshes, dataset_ids):
+            mesh.export(file_obj=mesh_folder/ply_name)
+
 
         obj_meshes = []
         obj_poses = []
@@ -689,23 +696,16 @@ class AnnotationScene:
             obj_ids.append(oi)
             obj_dataset_ids.append(obj.id)
 
-        print(self.scene_object_ids)
-        print(self.dataset_object_ids)
-        vis_masks = self.render_masks_vis(cam_intrinsics, deepcopy(cam_poses_world_cords), deepcopy(obj_meshes), obj_ids, deepcopy(obj_poses))
 
-
-
-      
+        vis_masks = self.render_masks_vis(deepcopy(cam_intrinsics), deepcopy(cam_poses_world_cords), deepcopy(obj_meshes), deepcopy(obj_ids), deepcopy(obj_poses))
 
         all_obj_meshes = obj_meshes + meshes
         all_obj_ids = obj_ids + annotation_obj_scene_ids
         all_obj_dataset_ids = obj_dataset_ids + annotation_obj_dataset_ids
-        print(all_obj_ids)
-        print(obj_ids)
-        print(annotation_obj_scene_ids)
+
         all_obj_poses = obj_poses + poses
 
-        full_masks = self.render_masks_all(cam_intrinsics, deepcopy(cam_poses_world_cords), deepcopy(all_obj_meshes), all_obj_ids, deepcopy(all_obj_poses))
+        full_masks = self.render_masks_all(deepcopy(cam_intrinsics), deepcopy(cam_poses_world_cords), deepcopy(all_obj_meshes), deepcopy(all_obj_ids), deepcopy(all_obj_poses))
 
         rgb_paths = scene_file_reader.get_images_rgb_path(scene_id)
         depth_paths = scene_file_reader.get_images_depth_path(scene_id)
@@ -714,27 +714,31 @@ class AnnotationScene:
         depths = [cv2.imread(depth_path, cv2.IMREAD_UNCHANGED) for depth_path in depth_paths]
 
         scene_gts, scene_gts_info = self.get_gt_jsons(
-            cam_poses_world_cords, 
-            all_obj_poses, 
-            all_obj_dataset_ids,
-            full_masks, 
-            vis_masks, 
-            depths, 
-            OBJ_3D_DAT_TO_BOP_ID)
+            deepcopy(cam_poses_world_cords),
+            deepcopy(all_obj_poses), 
+            deepcopy(all_obj_dataset_ids),
+            deepcopy(full_masks), 
+            deepcopy(vis_masks), 
+            deepcopy(depths), 
+            deepcopy(OBJ_3D_DAT_TO_BOP_ID))
 
-        scene_cameras = self.get_scene_cameras(cam_intrinsics_final, cam_poses_world_cords)
-
+        scene_cameras = self.get_scene_cameras(deepcopy(cam_intrinsics_final), deepcopy(cam_poses_world_cords))
+        if experiment == None:
+            only_masks = False
+        else:
+            only_masks = True
         self.write_bop_files(
-            scene_path_bop, 
-            cam_poses_world_cords, 
-            rgbs, 
-            depths, 
-            full_masks, 
-            vis_masks, 
-            all_obj_meshes, 
-            scene_gts, 
-            scene_gts_info, 
-            scene_cameras)
+            deepcopy(scene_path_bop), 
+            deepcopy(cam_poses_world_cords), 
+            deepcopy(rgbs), 
+            deepcopy(depths), 
+            deepcopy(full_masks), 
+            deepcopy(vis_masks), 
+            deepcopy(all_obj_meshes), 
+            deepcopy(scene_gts), 
+            deepcopy(scene_gts_info), 
+            deepcopy(scene_cameras),
+            only_masks=only_masks)
 
         #write scene
 

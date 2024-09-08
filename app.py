@@ -11,10 +11,11 @@ from utils.annotationdataset import AnnotationDataset
 import pandas as pd
 from copy import deepcopy
 from collections import deque
+import objgraph
 
 dataset = None
 predictor = None
-savestate_stack = deque(maxlen=2)
+# savestate_stack = deque(maxlen=2)
 
 js_events = """
 <script>
@@ -425,13 +426,17 @@ def accept_annotation(voxel_image, keep_voxels_outside_image, img_selection, vox
     print("accept_annotation")
     global dataset
     global predictor
-    global savestate_stack
+    # global savestate_stack
 
     active_scene = dataset.active_scene
     active_image = active_scene.active_image
     active_image.annotation_accepted = True
 
-    savestate_stack.append(deepcopy(dataset))
+    # if len(savestate_stack) == 2:
+    #     left_item = savestate_stack.popleft()
+    #     objgraph.show_refs(left_item, filename='objgraph_left_item.png')
+    #     del left_item
+    # savestate_stack.append(deepcopy(dataset))
 
     status_md = ("### Click on the image to add prompts (Foreground - Left click, "
                 "Background - Right click)\n")
@@ -555,11 +560,11 @@ def manual_annotation_done():
 def write_annotation_to_bop(output_path):
 
     global dataset
-    # #check if all images have been annotated
-    # for img in dataset.active_scene.annotation_images.values():
-    #     if img.annotation_accepted == False:
-    #         gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
-    #         return
+    # check if all images have been annotated
+    for img in dataset.active_scene.annotation_images.values():
+        if img.annotation_accepted == False:
+            gr.Warning(f"Please accept all annotations first [{img.rgb_path.name} not accepted]", duration=3)
+            return
         
     print("write_to_bop")
 
@@ -582,17 +587,17 @@ def restore_savestate():  #TODO handle manual annotation done
         A tuple containing the updated scene ID, image path, annotation objects selection, voxel image, voxel grid button, and visualization image.
     """
     print("restore_savestate")
-    global savestate_stack
+    # global savestate_stack
     global dataset
 
-    if len(savestate_stack) > 1:
-        savestate = savestate_stack.pop()
-        dataset = deepcopy(savestate)
-    elif len(savestate_stack) == 1:
-        gr.Info("Last restore point", duration=1)
-        savestate = savestate_stack[0]
-    else:
-        gr.Info("No restore points", duration=1)
+    # if len(savestate_stack) > 1:
+    #     savestate = savestate_stack.pop()
+    #     dataset = deepcopy(savestate)
+    # elif len(savestate_stack) == 1:
+    #     gr.Info("Last restore point", duration=1)
+    #     savestate = savestate_stack[0]
+    # else:
+    #     gr.Info("No restore points", duration=1)
 
     voxel_image, instanciate_voxel_grid_btn = get_voxel_image_and_button(dataset)
     annotation_objects_selection = get_annotation_objects_selection(dataset)
@@ -649,6 +654,41 @@ def get_annotation_objects_selection(dataset):
         radio_options = []
         default_value = None
     return gr.Radio(label="Select Object", choices=radio_options, value=default_value)
+
+def generate_and_write_experiment(path):
+    #for all images in current scenes that have no annotation accepted
+    # clear prompts and generate auto prompts
+    # write to bop in folder path that has the number of accpeted annotations in the folder name something like 000005_00x where 5 is the scene id and x is the number of accepted annotations
+    # clear all prompts and annotations for images that have no annotation accepted
+
+    global dataset
+    global predictor
+    active_scene = dataset.active_scene
+    
+    num_accepted_annotations = 0
+    for img in active_scene.annotation_images.values():
+        if img.annotation_accepted == False:
+            img.reset_prompts()
+            rgb = cv2.cvtColor(cv2.imread(img.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+            predictor.set_image(rgb)
+            img.generate_auto_prompts(active_scene, predictor)
+        else:
+            num_accepted_annotations += 1
+    
+    print(f"Writing to BOP with {num_accepted_annotations} accepted annotations")
+
+    active_scene.write_to_bop(path, mode="train", experiment=num_accepted_annotations)
+
+    print("Writing done")
+
+    for img in active_scene.annotation_images.values():
+        if img.annotation_accepted == False:
+            img.reset_prompts()
+
+    image = active_scene.active_image.generate_visualization()
+    rgb_image = cv2.cvtColor(cv2.imread(active_scene.active_image.rgb_path, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    predictor.set_image(rgb_image)
+    return image
 
 def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoints/sam_vit_h_4b8939.pth", model_type="vit_h", device="cuda"):
     global dataset
@@ -719,6 +759,7 @@ def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoin
                 manual_annotation_done_btn = gr.Button("Manual Annotation Done")
                 write_to_bop_btn = gr.Button("Write to BOP")
                 eraser_checkbox = gr.Checkbox(label="erase prompts")
+                generate_and_write_experiment_btn = gr.Button("Generate and Write Experiment")
                 
         add_object_to_library_btn.click(
             update_object_library, 
@@ -809,6 +850,9 @@ def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoin
             outputs=[scene_selection, img_selection, annotation_objects_selection, voxel_image, seen_all_objects_btn, prompting_image]
         )
 
+        generate_and_write_experiment_btn.click(
+            generate_and_write_experiment, [gr.State(output_path)], [prompting_image])
+
         #TODO
         #make filterin a bit more restrictive -> finetune
         #add button to reidentify voxels in scene -> if manual annotation done -> should be ready to test
@@ -853,7 +897,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-o',
         dest='output_path',
-        default = '../output2',
+        default = '/media/Data/Data/DavidDylan/tube_output2',
         help='path_to_output'
     )
 

@@ -99,49 +99,38 @@ class AnnotationImage:
 
         self.reset_prompts()
 
-        start_time = time.time()
         voxelgrid = scene.voxel_grid
         voxelgrid_segmap = voxelgrid.project_voxelgrid(scene.img_width, scene.img_height, scene.camera_intrinsics, self.camera_pose, voxelgrid.o3d_grid_id)
         voxelgrid_segmap = voxelgrid_segmap[:,:,0]
-        print(f"Time taken for voxelgrid setup: {time.time() - start_time:.2f} seconds")
 
-        print("generating prompts")
 
         for obj in self.annotation_objects.values():
             if obj.mask is not None:
                 print("mask not none")
                 continue
 
-            start_time = time.time()
             mask = np.zeros_like(voxelgrid_segmap)
             mask[voxelgrid_segmap == obj.scene_object_id] = 255
-            print(f"Time taken for mask setup: {time.time() - start_time:.2f} seconds")
 
             #3. generate prompts
-            start_time = time.time()
             prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True)
             if prompt_points is not None:
                 for point in prompt_points:
                     self.active_object = obj
                     self.add_prompt([[point[1], point[0]]], [1], predictor)
-            print(f"Time taken for generating positive prompts: {time.time() - start_time:.2f} seconds")
 
             for scene_object_id in scene.scene_object_ids:
                 if scene_object_id != obj.scene_object_id:
-                    start_time = time.time()
                     mask = np.zeros_like(voxelgrid_segmap)
                     mask[voxelgrid_segmap == scene_object_id] = 255
                     if np.sum(mask) == 0:
                         continue
-                    print(f"Time taken for mask setup: {time.time() - start_time:.2f} seconds")
 
-                    start_time = time.time()
                     prompt_points = self.get_prompt_points_from_mask(mask, debug_visualization=True, just_one_point=True)
                     if prompt_points is not None:
                         for point in prompt_points:
                             self.active_object = obj
                             self.add_prompt([[point[1], point[0]]], [0], predictor)
-                    print(f"Time taken for generating negative prompts: {time.time() - start_time:.2f} seconds")
 
     def erode_with_minimum_points(self, mask, kernel, iterations, min_points_ratio):
         initial_size = np.count_nonzero(mask)
