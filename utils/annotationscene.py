@@ -103,7 +103,7 @@ class AnnotationScene:
             i+=1
             object_name = f"{object_name.rpartition('_')[0]}_{i}"
 
-        scene_object_id = max(self.scene_object_ids)+1
+        scene_object_id = max(self.scene_object_ids+self.get_annotation_object_ids()[0])+1
         # self.scene_object_ids.append(scene_object_id)
 
         for anno_image in self.annotation_images.values():
@@ -253,9 +253,9 @@ class AnnotationScene:
             distances.append(np.linalg.norm(self.poi - camera_pose.tf[:3, 3]))
         max_distance = np.max(distances)
 
-        width = max_distance * 1.5
-        height = max_distance * 1.5
-        depth = max_distance * 1.5
+        width = max_distance * 1
+        height = max_distance * 1
+        depth = max_distance * 1
 
         start_time = time.time()
         self.voxel_grid = VoxelGrid(
@@ -543,8 +543,6 @@ class AnnotationScene:
                 if len(visible_us) == 0 or len(visible_vs) == 0:
                     continue
 
-                
-
                 obj_info = {
                         "bbox_obj": get_bbox_from_mask(masks_all[ii][oi]),
                         "bbox_visib": get_bbox_from_mask(masks_visible[ii][oi]),
@@ -611,6 +609,8 @@ class AnnotationScene:
 
             obj_counter = 0
             for oi, obj in enumerate(objects):
+                if masks_visible[ii][oi].sum() == 0:
+                    continue
                 obj_id = f"{obj_counter:06d}"
                 cv2.imwrite(os.path.join(scene_path_bop, f"mask_visib/{img_id}_{obj_id}.png"),
                     255 * masks_visible[ii][oi].astype(np.uint8))
@@ -644,7 +644,7 @@ class AnnotationScene:
             for obj_id, obj in object_lib.items()
         }
         for dataset_obj_id in  annotation_obj_dataset_ids:
-            OBJ_3D_DAT_TO_BOP_ID[dataset_obj_id] = dataset_obj_id
+            OBJ_3D_DAT_TO_BOP_ID[dataset_obj_id] = int(dataset_obj_id)
 
 
         # write_scene_to_bop(path, si, self.scene_id, self.scene_reader, OBJ_3D_DAT_TO_BOP_ID, "train")
@@ -678,12 +678,14 @@ class AnnotationScene:
 
         mesh_folder = path/"models"/f"{(si):06d}"
         if experiment != None:
-            ply_name = f"obj_{int(id):06d}_{(experiment):03d}.ply"
+            ply_name = f"obj_{int(id):06d}_{(experiment):03d}"
         else:
-            ply_name = f"obj_{int(id):06d}.ply"
+            ply_name = f"obj_{int(id):06d}"
         os.makedirs(mesh_folder, exist_ok=True)
-        for mesh, id in zip(meshes, dataset_ids):
-            mesh.export(file_obj=mesh_folder/ply_name)
+        for i, mesh in enumerate(meshes):
+            mesh.apply_scale(1000)
+            mesh.export(file_obj=str(mesh_folder/ply_name) + f"_{i}.ply")
+            mesh.apply_scale(1/1000)
 
 
         obj_meshes = []
@@ -730,10 +732,10 @@ class AnnotationScene:
         self.write_bop_files(
             deepcopy(scene_path_bop), 
             deepcopy(cam_poses_world_cords), 
-            deepcopy(rgbs), 
-            deepcopy(depths), 
-            deepcopy(full_masks), 
-            deepcopy(vis_masks), 
+            rgbs, 
+            depths, 
+            full_masks, 
+            vis_masks, 
             deepcopy(all_obj_meshes), 
             deepcopy(scene_gts), 
             deepcopy(scene_gts_info), 

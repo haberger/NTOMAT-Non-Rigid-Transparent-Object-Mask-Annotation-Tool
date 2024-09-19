@@ -258,7 +258,7 @@ def change_image(img_selection, object_selection):
     if object_selection is not None:
         prompt_image.active_object = prompt_image.annotation_objects[object_selection]
 
-    if dataset.active_scene.manual_annotation_done:
+    if dataset.active_scene.manual_annotation_done and not dataset.active_scene.active_image.annotation_accepted:
         prompt_image.generate_auto_prompts(dataset.active_scene, predictor)
 
     return prompt_image.generate_visualization()
@@ -665,6 +665,10 @@ def generate_and_write_experiment(path):
     global predictor
     active_scene = dataset.active_scene
     
+    if active_scene.voxel_grid is None:
+        gr.Warning("Please instanciate the voxel grid first", duration=3)
+        return
+
     num_accepted_annotations = 0
     for img in active_scene.annotation_images.values():
         if img.annotation_accepted == False:
@@ -877,7 +881,6 @@ def main(dataset_path, voxel_size, output_path, checkpoint_path="model_checkpoin
         #TODO Flip
     demo.queue()
     demo.launch()
-    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='NTOMAT')
@@ -897,7 +900,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-o',
         dest='output_path',
-        default = '/media/Data/Data/DavidDylan/tube_output2',
+        default = '/media/Data/Data/DavidDylan/tracebotreal',
         help='path_to_output'
     )
 
